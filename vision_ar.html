@@ -343,7 +343,7 @@
       padding: 8px;
       display: flex;
       gap: 4px;
-      z-index: 90;
+      z-index: 80;
       opacity: 0;
       transform: translateX(-50%) translateY(20px);
       transition: all 0.3s ease;
@@ -403,12 +403,17 @@
       padding-bottom: env(safe-area-inset-bottom);
       transform: translateY(calc(100% - 80px - env(safe-area-inset-bottom)));
       transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      z-index: 100;
+      z-index: 90;
       border-radius: 20px 20px 0 0;
+      will-change: transform;
     }
 
     #bottomControls.expanded {
       transform: translateY(0);
+    }
+    
+    #bottomControls.dragging {
+      transition: none;
     }
 
     .control-pill {
@@ -417,6 +422,24 @@
       background: rgba(255, 255, 255, 0.3);
       border-radius: 3px;
       margin: 12px auto 16px;
+      cursor: grab;
+      position: relative;
+      touch-action: none;
+    }
+    
+    .control-pill::before {
+      content: '';
+      position: absolute;
+      top: -20px;
+      left: -40px;
+      right: -40px;
+      bottom: -20px;
+      background: transparent;
+    }
+    
+    .control-pill:active {
+      background: rgba(255, 255, 255, 0.5);
+      transform: scaleX(1.2);
     }
 
     .control-content {
@@ -424,6 +447,7 @@
       max-height: 50vh;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
     }
 
     /* Sliders */
@@ -500,9 +524,10 @@
       cursor: pointer;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
       transition: all 0.3s ease;
-      z-index: 95;
+      z-index: 85;
       opacity: 0;
       transform: translateX(-50%) scale(0);
+      pointer-events: auto;
     }
 
     .capture-button.visible {
@@ -658,6 +683,10 @@
       
       .onboarding-title {
         font-size: 36px;
+      }
+      
+      #bottomControls {
+        transform: translateY(calc(100% - 60px - env(safe-area-inset-bottom)));
       }
     }
 
@@ -1069,34 +1098,89 @@
         const controlPill = controls.querySelector('.control-pill');
         
         let startY = 0;
+        let currentY = 0;
         let isDragging = false;
+        let startTime = 0;
+        const threshold = 30; // Lower threshold for easier swiping
         
         const handleStart = (e) => {
           const touch = e.touches ? e.touches[0] : e;
           startY = touch.clientY;
+          currentY = startY;
           isDragging = true;
+          startTime = Date.now();
+          
+          // Add dragging class for visual feedback
+          controls.classList.add('dragging');
         };
         
         const handleMove = (e) => {
           if (!isDragging) return;
           e.preventDefault();
+          e.stopPropagation();
           
           const touch = e.touches ? e.touches[0] : e;
-          const deltaY = startY - touch.clientY;
+          currentY = touch.clientY;
+          const deltaY = startY - currentY;
           
-          if (Math.abs(deltaY) > 50) {
-            controls.classList.toggle('expanded', deltaY > 0);
-            isDragging = false;
-          }
+          // Live preview of drag
+          const currentTransform = controls.classList.contains('expanded') ? 0 : 
+            (controls.offsetHeight - 80 - parseInt(getComputedStyle(controls).paddingBottom));
+          const newTransform = Math.max(0, Math.min(currentTransform - deltaY, 
+            controls.offsetHeight - 80 - parseInt(getComputedStyle(controls).paddingBottom)));
+          
+          controls.style.transform = `translateY(${newTransform}px)`;
         };
         
         const handleEnd = () => {
+          if (!isDragging) return;
           isDragging = false;
+          
+          const deltaY = startY - currentY;
+          const deltaTime = Date.now() - startTime;
+          const velocity = Math.abs(deltaY) / deltaTime;
+          
+          // Re-enable transitions
+          controls.classList.remove('dragging');
+          controls.style.transform = '';
+          
+          // Determine final state based on gesture
+          if (Math.abs(deltaY) > threshold || velocity > 0.5) {
+            if (deltaY > 0) {
+              // Swipe up - expand
+              controls.classList.add('expanded');
+            } else {
+              // Swipe down - collapse
+              controls.classList.remove('expanded');
+            }
+          } else {
+            // Snap back to current state
+            const isExpanded = controls.classList.contains('expanded');
+            controls.classList.toggle('expanded', isExpanded);
+          }
         };
         
+        // Handle both touch and mouse events
         controlPill.addEventListener('touchstart', handleStart, { passive: true });
         controlPill.addEventListener('touchmove', handleMove, { passive: false });
         controlPill.addEventListener('touchend', handleEnd);
+        controlPill.addEventListener('touchcancel', handleEnd);
+        
+        // Mouse events for testing
+        controlPill.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          handleStart(e);
+        });
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleEnd);
+        
+        // Click to toggle
+        controlPill.addEventListener('click', (e) => {
+          if (Math.abs(startY - currentY) < 5) { // Only toggle on tap, not swipe
+            e.stopPropagation();
+            controls.classList.toggle('expanded');
+          }
+        });
       }
 
       setupSliders() {
