@@ -59,6 +59,18 @@
       z-index: 15;
       pointer-events: none;
     }
+    
+    #tapHandler {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      z-index: 20;
+      pointer-events: none;
+    }
+    
+    #tapHandler.active {
+      pointer-events: auto;
+    }
 
     #segmentationCanvas {
       z-index: 8;
@@ -672,6 +684,7 @@
     <canvas id="segmentationCanvas"></canvas>
     <canvas id="effectCanvas"></canvas>
     <canvas id="overlayCanvas"></canvas>
+    <div id="tapHandler"></div>
   </div>
 
   <!-- Onboarding -->
@@ -706,8 +719,8 @@
 
     <div class="onboarding-footer">
       <p class="permission-note">
-        This app needs camera access to work.<br>
-        All processing happens on your device.
+        🔒 This app needs camera access to work.<br>
+        🎯 All processing happens on your device - no data leaves your phone.
       </p>
       <button class="start-button" id="startExperience">Start Experience</button>
     </div>
@@ -955,6 +968,11 @@
         this.isRunning = false;
         this.facingMode = 'environment';
         
+        // Color sampling
+        this.selectedObject = null;
+        this.sampledColor = null;
+        this.colorTarget = null;
+        
         // Settings
         this.settings = {
           edge: {
@@ -1034,6 +1052,9 @@
 
         // Touch gestures
         this.setupTouchGestures();
+        
+        // Color mode tap handler
+        this.setupColorModeTapHandler();
 
         // Orientation changes
         window.addEventListener('orientationchange', () => {
@@ -1219,6 +1240,13 @@
       switchMode(mode) {
         this.currentMode = mode;
         
+        // Reset color selection when leaving color mode
+        if (mode !== 'color') {
+          this.selectedObject = null;
+          this.sampledColor = null;
+          this.colorTarget = null;
+        }
+        
         // Update UI
         document.querySelectorAll('.mode-button').forEach(btn => {
           btn.classList.toggle('active', btn.dataset.mode === mode);
@@ -1238,8 +1266,14 @@
           controls.style.display = 'block';
         }
         
+        // Mode-specific messages
+        let message = `Mode: ${mode.charAt(0).toUpperCase() + mode.slice(1)}`;
+        if (mode === 'color') {
+          message += ' - Tap an object to change its color';
+        }
+        
         // Show notification
-        this.showNotification(`Mode: ${mode.charAt(0).toUpperCase() + mode.slice(1)}`);
+        this.showNotification(message);
         
         // Haptic feedback
         if ('vibrate' in navigator) {
@@ -1448,8 +1482,16 @@
         const startTime = performance.now();
         
         try {
-          // Draw video to offscreen canvas first (double buffering)
+          // Always draw video to maintain smooth playback
           this.offscreenCtx.drawImage(this.video, 0, 0, this.offscreenCanvas.width, this.offscreenCanvas.height);
+          
+          // Clear canvases based on mode
+          if (this.currentMode !== 'segmentation') {
+            this.segmentationCtx.clearRect(0, 0, this.segmentationCanvas.width, this.segmentationCanvas.height);
+          }
+          if (this.currentMode !== 'color' && this.currentMode !== 'effects') {
+            this.effectCtx.clearRect(0, 0, this.effectCanvas.width, this.effectCanvas.height);
+          }
           
           // Clear overlay offscreen buffer
           this.overlayOffscreenCtx.clearRect(0, 0, this.overlayOffscreen.width, this.overlayOffscreen.height);
@@ -1474,8 +1516,10 @@
               break;
           }
           
-          // Commit offscreen buffers to visible canvases (double buffering)
+          // Always update base video canvas
           this.cvCtx.drawImage(this.offscreenCanvas, 0, 0);
+          
+          // Update overlay
           this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
           this.overlayCtx.drawImage(this.overlayOffscreen, 0, 0);
           
@@ -1540,27 +1584,43 @@
       }
 
       async processSegmentationMode(shouldProcess) {
-        // Clear segmentation canvas
-        this.segmentationCtx.clearRect(0, 0, this.segmentationCanvas.width, this.segmentationCanvas.height);
-        
-        // Use cached detections if available
-        const predictions = shouldProcess && this.objectDetector ? 
-          await this.objectDetector.detect(this.video) : 
-          this.lastDetections;
-          
-        if (shouldProcess && predictions.length > 0) {
+        // Get detections
+        let predictions = [];
+        if (shouldProcess && this.objectDetector) {
+          predictions = await this.objectDetector.detect(this.video);
           this.lastDetections = predictions;
           this.lastDetectionTime = performance.now();
+        } else if (this.lastDetections.length > 0) {
+          predictions = this.lastDetections;
         }
         
-        // Draw original video with reduced opacity for background
+        // Clear and draw base layer
+        this.segmentationCtx.clearRect(0, 0, this.segmentationCanvas.width, this.segmentationCanvas.height);
+        
+        if (predictions.length === 0) {
+          // No objects detected, just show dimmed video
+          this.segmentationCtx.globalAlpha = 0.5;
+          this.segmentationCtx.filter = `blur(${this.settings.segmentation.backgroundBlur}px)`;
+          this.segmentationCtx.drawImage(this.offscreenCanvas, 0, 0);
+          this.segmentationCtx.filter = 'none';
+          this.segmentationCtx.globalAlpha = 1;
+          return;
+        }
+        
+        // Create mask for all detected objects
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = this.segmentationCanvas.width;
+        maskCanvas.height = this.segmentationCanvas.height;
+        const maskCtx = maskCanvas.getContext('2d');
+        
+        // Draw dimmed background
         this.segmentationCtx.globalAlpha = 0.3;
         this.segmentationCtx.filter = `blur(${this.settings.segmentation.backgroundBlur}px)`;
         this.segmentationCtx.drawImage(this.offscreenCanvas, 0, 0);
         this.segmentationCtx.filter = 'none';
         this.segmentationCtx.globalAlpha = 1;
         
-        // Highlight detected objects
+        // Draw highlighted objects
         predictions.forEach(prediction => {
           if (prediction.score > this.settings.segmentation.precision) {
             const [x, y, width, height] = prediction.bbox;
@@ -1572,27 +1632,34 @@
             const scaledWidth = Math.floor(width * scaleX);
             const scaledHeight = Math.floor(height * scaleY);
             
-            // Draw the object clearly
+            // Create spotlight effect
             this.segmentationCtx.save();
+            
+            // Draw bright object
+            const gradient = this.segmentationCtx.createRadialGradient(
+              scaledX + scaledWidth/2, scaledY + scaledHeight/2, 0,
+              scaledX + scaledWidth/2, scaledY + scaledHeight/2, Math.max(scaledWidth, scaledHeight)
+            );
+            gradient.addColorStop(0, 'rgba(0, 255, 204, 0.3)');
+            gradient.addColorStop(0.7, 'rgba(0, 255, 204, 0.1)');
+            gradient.addColorStop(1, 'rgba(0, 255, 204, 0)');
+            
+            this.segmentationCtx.fillStyle = gradient;
+            this.segmentationCtx.fillRect(scaledX - 50, scaledY - 50, scaledWidth + 100, scaledHeight + 100);
+            
+            // Draw the object clearly
             this.segmentationCtx.globalAlpha = 1;
-            
-            // Create clipping path for rounded corners
-            this.segmentationCtx.beginPath();
-            this.segmentationCtx.roundRect(scaledX - 5, scaledY - 5, scaledWidth + 10, scaledHeight + 10, 10);
-            this.segmentationCtx.clip();
-            
-            // Draw the object from original video
             this.segmentationCtx.drawImage(this.video, 
               x, y, width, height, 
               scaledX, scaledY, scaledWidth, scaledHeight
             );
             
-            // Add glow effect
+            // Add glow outline
+            this.segmentationCtx.strokeStyle = '#00ffcc';
+            this.segmentationCtx.lineWidth = 3;
             this.segmentationCtx.shadowColor = '#00ffcc';
             this.segmentationCtx.shadowBlur = 20;
-            this.segmentationCtx.strokeStyle = '#00ffcc';
-            this.segmentationCtx.lineWidth = 2;
-            this.segmentationCtx.stroke();
+            this.segmentationCtx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
             
             this.segmentationCtx.restore();
           }
@@ -1603,18 +1670,10 @@
         // Clear effect canvas
         this.effectCtx.clearRect(0, 0, this.effectCanvas.width, this.effectCanvas.height);
         
-        // Only process if color settings have changed
-        const colorChanged = this.settings.color.hue !== 0 || 
-                           this.settings.color.saturation !== 100 || 
-                           this.settings.color.brightness !== 100;
-                           
-        if (!colorChanged) {
-          // Just draw the original video
-          this.effectCtx.drawImage(this.offscreenCanvas, 0, 0);
-          return;
-        }
+        // Draw original video first
+        this.effectCtx.drawImage(this.offscreenCanvas, 0, 0);
         
-        // Use cached detections or get new ones
+        // Get detections
         const predictions = this.frameSkipCounter % 2 === 0 && this.objectDetector ? 
           await this.objectDetector.detect(this.video) : 
           this.lastDetections;
@@ -1624,15 +1683,24 @@
           this.lastDetectionTime = performance.now();
         }
         
-        // Draw original video first
-        this.effectCtx.drawImage(this.offscreenCanvas, 0, 0);
-        
-        // Apply color manipulation to detected objects
+        // Draw object indicators
         predictions.forEach(prediction => {
-          if (prediction.score > 0.6) {
-            this.applyOptimizedColorManipulation(prediction);
+          if (prediction.score > 0.5) {
+            this.drawColorModeIndicator(prediction);
           }
         });
+        
+        // Apply color changes to selected object
+        if (this.selectedObject && this.sampledColor) {
+          // Check if color settings have changed
+          const colorChanged = this.settings.color.hue !== 0 || 
+                             this.settings.color.saturation !== 100 || 
+                             this.settings.color.brightness !== 100;
+                             
+          if (colorChanged) {
+            this.applySmartColorChange(this.selectedObject);
+          }
+        }
       }
 
       async processEffectsMode() {
@@ -2163,13 +2231,232 @@
             this.isRunning = true;
             this.processFrame();
             
-            this.showNotification('Swipe left/right to change modes');
+            this.showNotification('Welcome to VisionAR 🔮 Swipe to explore');
           }, 500);
           
         } catch (error) {
           console.error('Startup error:', error);
           this.showNotification('Error: ' + error.message);
         }
+      }
+      
+      setupColorModeTapHandler() {
+        const tapHandler = document.getElementById('tapHandler');
+        
+        tapHandler.addEventListener('click', (e) => {
+          if (this.currentMode !== 'color') return;
+          
+          const rect = tapHandler.getBoundingClientRect();
+          const x = (e.clientX - rect.left) * (this.video.videoWidth / rect.width);
+          const y = (e.clientY - rect.top) * (this.video.videoHeight / rect.height);
+          
+          // Find object at tap location
+          let tappedObject = null;
+          this.lastDetections.forEach(prediction => {
+            const [objX, objY, objWidth, objHeight] = prediction.bbox;
+            if (x >= objX && x <= objX + objWidth && y >= objY && y <= objY + objHeight) {
+              tappedObject = prediction;
+            }
+          });
+          
+          if (tappedObject) {
+            this.selectedObject = tappedObject;
+            this.sampleObjectColor(tappedObject);
+            this.showNotification(`🎨 Selected: ${tappedObject.class}`);
+            
+            // Visual feedback
+            this.flashSelection(tappedObject);
+            
+            // Haptic feedback
+            if ('vibrate' in navigator) {
+              navigator.vibrate(30);
+            }
+          } else {
+            this.showNotification('🚫 No object detected at tap location');
+          }
+        });
+      }
+      
+      flashSelection(object) {
+        const [x, y, width, height] = object.bbox;
+        const scaleX = this.overlayCanvas.width / this.video.videoWidth;
+        const scaleY = this.overlayCanvas.height / this.video.videoHeight;
+        
+        const scaledX = x * scaleX;
+        const scaledY = y * scaleY;
+        const scaledWidth = width * scaleX;
+        const scaledHeight = height * scaleY;
+        
+        // Create flash effect
+        let opacity = 1;
+        const flash = () => {
+          this.overlayCtx.save();
+          this.overlayCtx.globalAlpha = opacity;
+          this.overlayCtx.strokeStyle = '#00ffcc';
+          this.overlayCtx.lineWidth = 5;
+          this.overlayCtx.shadowColor = '#00ffcc';
+          this.overlayCtx.shadowBlur = 30;
+          this.overlayCtx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
+          this.overlayCtx.restore();
+          
+          opacity -= 0.05;
+          if (opacity > 0) {
+            requestAnimationFrame(flash);
+          }
+        };
+        flash();
+      }
+      
+      sampleObjectColor(object) {
+        // Sample the dominant color from the object
+        const [x, y, width, height] = object.bbox;
+        
+        // Create temporary canvas to sample color
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = width;
+        tempCanvas.height = height;
+        const tempCtx = tempCanvas.getContext('2d');
+        
+        // Draw object region
+        tempCtx.drawImage(this.video, x, y, width, height, 0, 0, width, height);
+        
+        // Sample center pixels
+        const imageData = tempCtx.getImageData(width/2 - 5, height/2 - 5, 10, 10);
+        const data = imageData.data;
+        
+        let r = 0, g = 0, b = 0;
+        let count = 0;
+        
+        for (let i = 0; i < data.length; i += 4) {
+          r += data[i];
+          g += data[i + 1];
+          b += data[i + 2];
+          count++;
+        }
+        
+        // Average color
+        this.sampledColor = {
+          r: Math.round(r / count),
+          g: Math.round(g / count),
+          b: Math.round(b / count)
+        };
+        
+        // Convert to HSL for targeting similar colors
+        const [h, s, l] = this.rgbToHsl(this.sampledColor.r, this.sampledColor.g, this.sampledColor.b);
+        this.colorTarget = { h, s, l };
+      }
+      
+      drawColorModeIndicator(prediction) {
+        const [x, y, width, height] = prediction.bbox;
+        const scaleX = this.overlayOffscreen.width / this.video.videoWidth;
+        const scaleY = this.overlayOffscreen.height / this.video.videoHeight;
+        
+        const scaledX = x * scaleX;
+        const scaledY = y * scaleY;
+        const scaledWidth = width * scaleX;
+        const scaledHeight = height * scaleY;
+        
+        const ctx = this.overlayOffscreenCtx;
+        
+        // Draw subtle indicator
+        ctx.save();
+        
+        const isSelected = this.selectedObject && 
+                          this.selectedObject.class === prediction.class &&
+                          Math.abs(this.selectedObject.bbox[0] - x) < 50;
+        
+        if (isSelected) {
+          // Selected object - animated glow
+          const time = Date.now() / 1000;
+          const pulse = Math.sin(time * 3) * 0.3 + 0.7;
+          
+          ctx.strokeStyle = '#00ffcc';
+          ctx.lineWidth = 3;
+          ctx.globalAlpha = pulse;
+          ctx.shadowColor = '#00ffcc';
+          ctx.shadowBlur = 20;
+        } else {
+          // Unselected objects - subtle outline
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([5, 5]);
+        }
+        
+        ctx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
+        
+        // Add tap hint for unselected objects
+        if (!isSelected && prediction.score > 0.7) {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+          ctx.font = 'bold 11px -apple-system, system-ui, sans-serif';
+          const text = 'TAP TO SELECT';
+          const textWidth = ctx.measureText(text).width;
+          ctx.fillText(text, scaledX + scaledWidth/2 - textWidth/2, scaledY + scaledHeight/2);
+        }
+        
+        ctx.restore();
+      }
+      
+      applySmartColorChange(object) {
+        if (!this.sampledColor || !this.colorTarget) return;
+        
+        const [x, y, width, height] = object.bbox;
+        const scaleX = this.effectCanvas.width / this.video.videoWidth;
+        const scaleY = this.effectCanvas.height / this.video.videoHeight;
+        
+        const scaledX = Math.floor(x * scaleX);
+        const scaledY = Math.floor(y * scaleY);
+        const scaledWidth = Math.floor(width * scaleX);
+        const scaledHeight = Math.floor(height * scaleY);
+        
+        // Get image data for the region
+        const imageData = this.effectCtx.getImageData(scaledX, scaledY, scaledWidth, scaledHeight);
+        const data = imageData.data;
+        
+        // Apply smart color replacement
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          
+          // Convert to HSL
+          const [h, s, l] = this.rgbToHsl(r, g, b);
+          
+          // Check if color is similar to sampled color (within tolerance)
+          const hDiff = Math.abs(h - this.colorTarget.h);
+          const sDiff = Math.abs(s - this.colorTarget.s);
+          const lDiff = Math.abs(l - this.colorTarget.l);
+          
+          // If color is similar, apply changes
+          if (hDiff < 0.1 && sDiff < 0.3 && lDiff < 0.3) {
+            // Apply HSL adjustments
+            let newH = (h + this.settings.color.hue / 360) % 1;
+            if (newH < 0) newH += 1;
+            
+            const newS = Math.min(1, Math.max(0, s * (this.settings.color.saturation / 100)));
+            const newL = Math.min(1, Math.max(0, l * (this.settings.color.brightness / 100)));
+            
+            // Convert back to RGB
+            const [newR, newG, newB] = this.hslToRgb(newH, newS, newL);
+            
+            // Smooth blending based on similarity
+            const blend = 1 - (hDiff / 0.1 + sDiff / 0.3 + lDiff / 0.3) / 3;
+            
+            data[i] = Math.round(r * (1 - blend) + newR * blend);
+            data[i + 1] = Math.round(g * (1 - blend) + newG * blend);
+            data[i + 2] = Math.round(b * (1 - blend) + newB * blend);
+          }
+        }
+        
+        // Put modified data back
+        this.effectCtx.putImageData(imageData, scaledX, scaledY);
+        
+        // Add subtle glow effect
+        this.effectCtx.save();
+        this.effectCtx.globalCompositeOperation = 'screen';
+        this.effectCtx.globalAlpha = 0.1;
+        this.effectCtx.filter = `hue-rotate(${this.settings.color.hue}deg)`;
+        this.effectCtx.drawImage(this.effectCanvas, scaledX, scaledY, scaledWidth, scaledHeight, scaledX, scaledY, scaledWidth, scaledHeight);
+        this.effectCtx.restore();
       }
     }
 
