@@ -991,6 +991,7 @@
         this.lastDetections = [];
         this.lastDetectionTime = 0;
         this.detectionCacheTimeout = 100; // Cache detections for 100ms
+        this.flashTimeout = null;
 
         // State
         this.currentMode = 'detection';
@@ -1123,11 +1124,15 @@
           currentY = touch.clientY;
           const deltaY = startY - currentY;
           
-          // Live preview of drag
-          const currentTransform = controls.classList.contains('expanded') ? 0 : 
-            (controls.offsetHeight - 80 - parseInt(getComputedStyle(controls).paddingBottom));
-          const newTransform = Math.max(0, Math.min(currentTransform - deltaY, 
-            controls.offsetHeight - 80 - parseInt(getComputedStyle(controls).paddingBottom)));
+          // Calculate the maximum translate value (collapsed position)
+          const maxTranslate = controls.scrollHeight - 80 - parseInt(getComputedStyle(controls).paddingBottom || 0);
+          
+          // Get current position
+          const isExpanded = controls.classList.contains('expanded');
+          const baseTransform = isExpanded ? 0 : maxTranslate;
+          
+          // Calculate new position based on drag
+          const newTransform = Math.max(0, Math.min(maxTranslate, baseTransform - deltaY));
           
           controls.style.transform = `translateY(${newTransform}px)`;
         };
@@ -1145,7 +1150,7 @@
           controls.style.transform = '';
           
           // Determine final state based on gesture
-          if (Math.abs(deltaY) > threshold || velocity > 0.5) {
+          if (Math.abs(deltaY) > threshold || velocity > 0.3) {
             if (deltaY > 0) {
               // Swipe up - expand
               controls.classList.add('expanded');
@@ -1154,9 +1159,16 @@
               controls.classList.remove('expanded');
             }
           } else {
-            // Snap back to current state
-            const isExpanded = controls.classList.contains('expanded');
-            controls.classList.toggle('expanded', isExpanded);
+            // Snap to nearest state based on current position
+            const maxTranslate = controls.scrollHeight - 80 - parseInt(getComputedStyle(controls).paddingBottom || 0);
+            const currentPos = parseFloat(controls.style.transform.replace('translateY(', '').replace('px)', '') || 0);
+            const halfwayPoint = maxTranslate / 2;
+            
+            if (currentPos < halfwayPoint) {
+              controls.classList.add('expanded');
+            } else {
+              controls.classList.remove('expanded');
+            }
           }
         };
         
@@ -1175,10 +1187,16 @@
         window.addEventListener('mouseup', handleEnd);
         
         // Click to toggle
+        let tapTimeout;
         controlPill.addEventListener('click', (e) => {
           if (Math.abs(startY - currentY) < 5) { // Only toggle on tap, not swipe
             e.stopPropagation();
-            controls.classList.toggle('expanded');
+            
+            // Debounce rapid clicks
+            if (tapTimeout) clearTimeout(tapTimeout);
+            tapTimeout = setTimeout(() => {
+              controls.classList.toggle('expanded');
+            }, 50);
           }
         });
       }
@@ -1423,14 +1441,7 @@
             navigator.vibrate(50);
           }
           
-          // Flash effect
-          this.overlayCtx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-          this.overlayCtx.fillRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
-          setTimeout(() => {
-            this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
-          }, 100);
-          
-          // Create composite image
+          // Create composite image BEFORE flash effect
           const canvas = document.createElement('canvas');
           canvas.width = this.effectCanvas.width;
           canvas.height = this.effectCanvas.height;
@@ -1438,9 +1449,26 @@
           
           // Draw all layers
           ctx.drawImage(this.cvCanvas, 0, 0);
-          ctx.drawImage(this.segmentationCanvas, 0, 0);
-          ctx.drawImage(this.effectCanvas, 0, 0);
+          if (this.currentMode === 'segmentation') {
+            ctx.drawImage(this.segmentationCanvas, 0, 0);
+          }
+          if (this.currentMode === 'color' || this.currentMode === 'effects') {
+            ctx.drawImage(this.effectCanvas, 0, 0);
+          }
           ctx.drawImage(this.overlayCanvas, 0, 0);
+          
+          // Flash effect AFTER capturing
+          this.overlayCtx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+          this.overlayCtx.fillRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+          
+          // Clear flash and reset overlays
+          setTimeout(() => {
+            this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+            // Clear any temporary effects
+            if (this.flashTimeout) {
+              clearTimeout(this.flashTimeout);
+            }
+          }, 100);
           
           // Convert to blob and download
           canvas.toBlob((blob) => {
@@ -1453,7 +1481,7 @@
             setTimeout(() => URL.revokeObjectURL(url), 100);
           }, 'image/jpeg', 0.9);
           
-          this.showNotification('Photo captured!');
+          this.showNotification('📸 Photo captured!');
         } catch (error) {
           console.error('Capture error:', error);
           this.showNotification('Capture failed');
@@ -2327,21 +2355,27 @@
       setupColorModeTapHandler() {
         const tapHandler = document.getElementById('tapHandler');
         
-        tapHandler.addEventListener('click', (e) => {
+        const handleTap = (e) => {
           if (this.currentMode !== 'color') return;
           
+          // Get coordinates from either touch or click
+          const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+          const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+          
           const rect = tapHandler.getBoundingClientRect();
-          const x = (e.clientX - rect.left) * (this.video.videoWidth / rect.width);
-          const y = (e.clientY - rect.top) * (this.video.videoHeight / rect.height);
+          const x = (clientX - rect.left) * (this.video.videoWidth / rect.width);
+          const y = (clientY - rect.top) * (this.video.videoHeight / rect.height);
           
           // Find object at tap location
           let tappedObject = null;
-          this.lastDetections.forEach(prediction => {
-            const [objX, objY, objWidth, objHeight] = prediction.bbox;
-            if (x >= objX && x <= objX + objWidth && y >= objY && y <= objY + objHeight) {
-              tappedObject = prediction;
-            }
-          });
+          if (this.lastDetections && this.lastDetections.length > 0) {
+            this.lastDetections.forEach(prediction => {
+              const [objX, objY, objWidth, objHeight] = prediction.bbox;
+              if (x >= objX && x <= objX + objWidth && y >= objY && y <= objY + objHeight && prediction.score > 0.5) {
+                tappedObject = prediction;
+              }
+            });
+          }
           
           if (tappedObject) {
             this.selectedObject = tappedObject;
@@ -2356,8 +2390,15 @@
               navigator.vibrate(30);
             }
           } else {
-            this.showNotification('🚫 No object detected at tap location');
+            this.showNotification('👆 Tap on an object to select it');
           }
+        };
+        
+        // Support both touch and click
+        tapHandler.addEventListener('click', handleTap);
+        tapHandler.addEventListener('touchstart', (e) => {
+          e.preventDefault();
+          handleTap(e);
         });
       }
       
@@ -2374,18 +2415,21 @@
         // Create flash effect
         let opacity = 1;
         const flash = () => {
-          this.overlayCtx.save();
-          this.overlayCtx.globalAlpha = opacity;
-          this.overlayCtx.strokeStyle = '#00ffcc';
-          this.overlayCtx.lineWidth = 5;
-          this.overlayCtx.shadowColor = '#00ffcc';
-          this.overlayCtx.shadowBlur = 30;
-          this.overlayCtx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
-          this.overlayCtx.restore();
+          // Clear previous flash
+          this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
           
-          opacity -= 0.05;
           if (opacity > 0) {
-            requestAnimationFrame(flash);
+            this.overlayCtx.save();
+            this.overlayCtx.globalAlpha = opacity;
+            this.overlayCtx.strokeStyle = '#00ffcc';
+            this.overlayCtx.lineWidth = 5;
+            this.overlayCtx.shadowColor = '#00ffcc';
+            this.overlayCtx.shadowBlur = 30;
+            this.overlayCtx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
+            this.overlayCtx.restore();
+            
+            opacity -= 0.08;
+            this.flashTimeout = requestAnimationFrame(flash);
           }
         };
         flash();
