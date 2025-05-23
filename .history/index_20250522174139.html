@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neural Vision - Advanced Computer Vision Demo</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #000;
+      overflow: hidden;
+      color: #fff;
+    }
+
+    #mainContainer {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(ellipse at center, #0a0a1a 0%, #000 100%);
+    }
+
+    video, canvas {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+
+    #video {
+      display: none;
+    }
+
+    #effectCanvas {
+      z-index: 10;
+      filter: contrast(1.1);
+    }
+
+    #particleCanvas {
+      z-index: 5;
+      pointer-events: none;
+      opacity: 0.7;
+    }
+
+    #loadingScreen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+      transition: opacity 0.8s ease;
+    }
+
+    #loadingScreen.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .neural-loader {
+      width: 200px;
+      height: 200px;
+      position: relative;
+      margin-bottom: 40px;
+    }
+
+    .neural-ring {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border: 2px solid transparent;
+      border-radius: 50%;
+      border-top-color: #00ffcc;
+      animation: neuralSpin 1.5s linear infinite;
+    }
+
+    .neural-ring:nth-child(2) {
+      width: 80%;
+      height: 80%;
+      top: 10%;
+      left: 10%;
+      border-top-color: #ff00ff;
+      animation-duration: 2s;
+      animation-direction: reverse;
+    }
+
+    .neural-ring:nth-child(3) {
+      width: 60%;
+      height: 60%;
+      top: 20%;
+      left: 20%;
+      border-top-color: #00ccff;
+      animation-duration: 2.5s;
+    }
+
+    @keyframes neuralSpin {
+      to { transform: rotate(360deg); }
+    }
+
+    .loading-text {
+      font-size: 24px;
+      font-weight: 300;
+      text-align: center;
+      background: linear-gradient(45deg, #00ffcc, #ff00ff, #00ccff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 20px;
+    }
+
+    .progress-container {
+      width: 300px;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #00ffcc 0%, #ff00ff 50%, #00ccff 100%);
+      border-radius: 3px;
+      transition: width 0.3s ease;
+      width: 0%;
+      box-shadow: 0 0 10px rgba(0, 255, 204, 0.5);
+    }
+
+    #controls {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      padding: 20px;
+      min-width: 300px;
+      z-index: 100;
+      box-shadow: 0 8px 32px rgba(0, 255, 204, 0.1);
+    }
+
+    .control-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      text-align: center;
+      background: linear-gradient(45deg, #00ffcc, #ff00ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .model-toggle {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .toggle-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 10px;
+      transition: all 0.3s ease;
+    }
+
+    .toggle-item:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+    }
+
+    .model-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #555;
+      transition: all 0.3s ease;
+    }
+
+    .model-indicator.active {
+      background: #00ffcc;
+      box-shadow: 0 0 10px rgba(0, 255, 204, 0.8);
+    }
+
+    .switch {
+      position: relative;
+      width: 50px;
+      height: 26px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: rgba(255, 255, 255, 0.1);
+      transition: .4s;
+      border-radius: 34px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: .4s;
+      border-radius: 50%;
+    }
+
+    input:checked + .slider {
+      background-color: #00ffcc;
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(24px);
+    }
+
+    #stats {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 15px 20px;
+      border-radius: 15px;
+      font-size: 12px;
+      font-family: 'Courier New', monospace;
+      z-index: 100;
+      display: grid;
+      grid-template-columns: auto auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .stat-label {
+      color: #888;
+      margin-right: 10px;
+    }
+
+    .stat-value {
+      color: #00ffcc;
+      font-weight: bold;
+    }
+
+    .effect-selector {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+      flex-wrap: wrap;
+    }
+
+    .effect-btn {
+      padding: 8px 16px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 20px;
+      color: white;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      font-size: 12px;
+    }
+
+    .effect-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+      transform: translateY(-2px);
+    }
+
+    .effect-btn.active {
+      background: linear-gradient(45deg, #00ffcc, #ff00ff);
+      border-color: transparent;
+    }
+
+    #info {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 20px;
+      border-radius: 15px;
+      max-width: 300px;
+      z-index: 100;
+    }
+
+    .info-title {
+      font-size: 18px;
+      margin-bottom: 10px;
+      background: linear-gradient(45deg, #00ffcc, #ff00ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .info-text {
+      font-size: 12px;
+      color: #aaa;
+      line-height: 1.5;
+    }
+
+    .error-message {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(255, 0, 100, 0.9);
+      padding: 30px;
+      border-radius: 20px;
+      text-align: center;
+      z-index: 2000;
+      max-width: 80%;
+      box-shadow: 0 0 50px rgba(255, 0, 100, 0.5);
+    }
+
+    .start-button {
+      background: linear-gradient(45deg, #00ffcc, #ff00ff);
+      border: none;
+      color: white;
+      padding: 15px 40px;
+      font-size: 18px;
+      border-radius: 30px;
+      cursor: pointer;
+      font-weight: 600;
+      margin-top: 30px;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 20px rgba(0, 255, 204, 0.3);
+    }
+
+    .start-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 30px rgba(0, 255, 204, 0.5);
+    }
+
+    @media (max-width: 768px) {
+      #controls {
+        top: 10px;
+        right: 10px;
+        min-width: 250px;
+        padding: 15px;
+      }
+      
+      #info {
+        display: none;
+      }
+      
+      .control-title {
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="mainContainer">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="particleCanvas"></canvas>
+    <canvas id="effectCanvas"></canvas>
+  </div>
+
+  <div id="loadingScreen">
+    <div class="neural-loader">
+      <div class="neural-ring"></div>
+      <div class="neural-ring"></div>
+      <div class="neural-ring"></div>
+    </div>
+    <div class="loading-text" id="loadingText">Neural Vision Initializing</div>
+    <div class="progress-container">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+    <button class="start-button" id="startButton" style="display: none;">Launch Neural Vision</button>
+  </div>
+
+  <div id="info">
+    <div class="info-title">Neural Vision</div>
+    <div class="info-text">
+      Advanced multi-model computer vision demo combining pose estimation, face detection, and hand tracking with real-time particle effects and cyberpunk visualization.
+    </div>
+  </div>
+
+  <div id="controls">
+    <div class="control-title">Neural Models</div>
+    <div class="model-toggle">
+      <div class="toggle-item">
+        <div class="toggle-label">
+          <div class="model-indicator" id="poseIndicator"></div>
+          <span>Pose Estimation</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="poseToggle" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="toggle-item">
+        <div class="toggle-label">
+          <div class="model-indicator" id="faceIndicator"></div>
+          <span>Face Detection</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="faceToggle" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="toggle-item">
+        <div class="toggle-label">
+          <div class="model-indicator" id="handIndicator"></div>
+          <span>Hand Tracking</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="handToggle" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="effect-selector">
+      <button class="effect-btn active" data-effect="cyber">Cyber</button>
+      <button class="effect-btn" data-effect="matrix">Matrix</button>
+      <button class="effect-btn" data-effect="hologram">Hologram</button>
+      <button class="effect-btn" data-effect="neural">Neural</button>
+    </div>
+  </div>
+
+  <div id="stats">
+    <div><span class="stat-label">FPS:</span><span class="stat-value" id="fps">0</span></div>
+    <div><span class="stat-label">Latency:</span><span class="stat-value" id="latency">0ms</span></div>
+    <div><span class="stat-label">Poses:</span><span class="stat-value" id="poseCount">0</span></div>
+    <div><span class="stat-label">Faces:</span><span class="stat-value" id="faceCount">0</span></div>
+    <div><span class="stat-label">Hands:</span><span class="stat-value" id="handCount">0</span></div>
+    <div><span class="stat-label">Particles:</span><span class="stat-value" id="particleCount">0</span></div>
+  </div>
+
+  <!-- TensorFlow.js and Models -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.0/dist/pose-detection.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection@1.0.2/dist/face-detection.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.0/dist/hand-pose-detection.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1635988162/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/face_detection.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
+
+  <script>
+    class NeuralVisionApp {
+      constructor() {
+        this.video = document.getElementById('video');
+        this.effectCanvas = document.getElementById('effectCanvas');
+        this.effectCtx = this.effectCanvas.getContext('2d');
+        this.particleCanvas = document.getElementById('particleCanvas');
+        this.particleCtx = this.particleCanvas.getContext('2d');
+        
+        // Models
+        this.poseDetector = null;
+        this.faceDetector = null;
+        this.handDetector = null;
+        
+        // State
+        this.isRunning = false;
+        this.currentEffect = 'cyber';
+        this.models = {
+          pose: true,
+          face: true,
+          hand: true
+        };
+        
+        // Particles
+        this.particles = [];
+        this.maxParticles = 200;
+        
+        // Performance
+        this.frameCount = 0;
+        this.lastTime = performance.now();
+        this.fps = 0;
+        
+        // Tracking data
+        this.previousPoses = [];
+        this.previousFaces = [];
+        this.previousHands = [];
+        
+        this.initializeEventListeners();
+      }
+
+      initializeEventListeners() {
+        // Model toggles
+        document.getElementById('poseToggle').addEventListener('change', (e) => {
+          this.models.pose = e.target.checked;
+          document.getElementById('poseIndicator').classList.toggle('active', e.target.checked);
+        });
+        
+        document.getElementById('faceToggle').addEventListener('change', (e) => {
+          this.models.face = e.target.checked;
+          document.getElementById('faceIndicator').classList.toggle('active', e.target.checked);
+        });
+        
+        document.getElementById('handToggle').addEventListener('change', (e) => {
+          this.models.hand = e.target.checked;
+          document.getElementById('handIndicator').classList.toggle('active', e.target.checked);
+        });
+        
+        // Effect buttons
+        document.querySelectorAll('.effect-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            document.querySelectorAll('.effect-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            this.currentEffect = btn.dataset.effect;
+          });
+        });
+
+        // Start button
+        document.getElementById('startButton').addEventListener('click', () => {
+          this.start();
+        });
+      }
+
+      updateProgress(progress, text) {
+        document.getElementById('progressBar').style.width = progress + '%';
+        document.getElementById('loadingText').textContent = text;
+      }
+
+      async setupCamera() {
+        try {
+          this.updateProgress(10, 'Accessing Neural Interface...');
+          
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              facingMode: 'user'
+            },
+            audio: false
+          });
+          
+          this.video.srcObject = stream;
+          this.video.setAttribute('playsinline', true);
+          
+          return new Promise((resolve) => {
+            this.video.onloadedmetadata = () => {
+              this.updateProgress(20, 'Neural Stream Connected...');
+              resolve(this.video);
+            };
+          });
+        } catch (error) {
+          this.showError('Neural interface connection failed. Please allow camera access.');
+          throw error;
+        }
+      }
+
+      async loadModels() {
+        try {
+          // Load Pose Detection
+          this.updateProgress(30, 'Loading Pose Neural Network...');
+          this.poseDetector = await poseDetection.createDetector(
+            poseDetection.SupportedModels.MoveNet,
+            {
+              modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+              enableSmoothing: true
+            }
+          );
+          
+          // Load Face Detection
+          this.updateProgress(50, 'Loading Face Neural Network...');
+          this.faceDetector = await faceDetection.createDetector(
+            faceDetection.SupportedModels.MediaPipeFaceDetector,
+            {
+              runtime: 'tfjs',
+              maxFaces: 5
+            }
+          );
+          
+          // Load Hand Detection
+          this.updateProgress(70, 'Loading Hand Neural Network...');
+          this.handDetector = await handPoseDetection.createDetector(
+            handPoseDetection.SupportedModels.MediaPipeHands,
+            {
+              runtime: 'tfjs',
+              maxHands: 4
+            }
+          );
+          
+          this.updateProgress(90, 'Neural Networks Synchronized...');
+          
+          // Initialize indicators
+          document.getElementById('poseIndicator').classList.add('active');
+          document.getElementById('faceIndicator').classList.add('active');
+          document.getElementById('handIndicator').classList.add('active');
+          
+        } catch (error) {
+          this.showError('Failed to load neural networks. Please refresh.');
+          throw error;
+        }
+      }
+
+      resizeCanvases() {
+        const width = this.video.videoWidth;
+        const height = this.video.videoHeight;
+        
+        this.effectCanvas.width = width;
+        this.effectCanvas.height = height;
+        this.particleCanvas.width = width;
+        this.particleCanvas.height = height;
+      }
+
+      createParticle(x, y, type) {
+        if (this.particles.length >= this.maxParticles) {
+          this.particles.shift();
+        }
+        
+        const colors = {
+          pose: '#00ffcc',
+          face: '#ff00ff',
+          hand: '#00ccff'
+        };
+        
+        this.particles.push({
+          x,
+          y,
+          vx: (Math.random() - 0.5) * 2,
+          vy: (Math.random() - 0.5) * 2,
+          life: 1.0,
+          decay: 0.02,
+          size: Math.random() * 3 + 2,
+          color: colors[type] || '#ffffff',
+          type
+        });
+      }
+
+      updateParticles() {
+        this.particleCtx.clearRect(0, 0, this.particleCanvas.width, this.particleCanvas.height);
+        
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+          const p = this.particles[i];
+          
+          p.x += p.vx;
+          p.y += p.vy;
+          p.life -= p.decay;
+          
+          if (p.life <= 0) {
+            this.particles.splice(i, 1);
+            continue;
+          }
+          
+          this.particleCtx.save();
+          this.particleCtx.globalAlpha = p.life;
+          this.particleCtx.fillStyle = p.color;
+          this.particleCtx.shadowBlur = 10;
+          this.particleCtx.shadowColor = p.color;
+          
+          this.particleCtx.beginPath();
+          this.particleCtx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+          this.particleCtx.fill();
+          this.particleCtx.restore();
+        }
+        
+        document.getElementById('particleCount').textContent = this.particles.length;
+      }
+
+      drawPose(pose) {
+        const keypoints = pose.keypoints;
+        const connections = poseDetection.util.getAdjacentPairs(poseDetection.SupportedModels.MoveNet);
+        
+        // Draw skeleton
+        this.effectCtx.strokeStyle = this.getEffectColor('pose');
+        this.effectCtx.lineWidth = 2;
+        this.effectCtx.shadowBlur = 10;
+        this.effectCtx.shadowColor = this.getEffectColor('pose');
+        
+        connections.forEach(([i, j]) => {
+          const kp1 = keypoints[i];
+          const kp2 = keypoints[j];
+          
+          if (kp1.score > 0.3 && kp2.score > 0.3) {
+            this.effectCtx.beginPath();
+            this.effectCtx.moveTo(kp1.x, kp1.y);
+            this.effectCtx.lineTo(kp2.x, kp2.y);
+            this.effectCtx.stroke();
+            
+            // Add particles along the line
+            if (Math.random() < 0.3) {
+              const midX = (kp1.x + kp2.x) / 2;
+              const midY = (kp1.y + kp2.y) / 2;
+              this.createParticle(midX, midY, 'pose');
+            }
+          }
+        });
+        
+        // Draw keypoints
+        keypoints.forEach(keypoint => {
+          if (keypoint.score > 0.3) {
+            this.effectCtx.fillStyle = this.getEffectColor('pose');
+            this.effectCtx.beginPath();
+            this.effectCtx.arc(keypoint.x, keypoint.y, 4, 0, Math.PI * 2);
+            this.effectCtx.fill();
+          }
+        });
+      }
+
+      drawFace(face) {
+        const box = face.box;
+        
+        this.effectCtx.strokeStyle = this.getEffectColor('face');
+        this.effectCtx.lineWidth = 2;
+        this.effectCtx.shadowBlur = 15;
+        this.effectCtx.shadowColor = this.getEffectColor('face');
+        
+        // Draw futuristic face box
+        const padding = 10;
+        const cornerLength = 20;
+        
+        // Top-left corner
+        this.effectCtx.beginPath();
+        this.effectCtx.moveTo(box.xMin - padding, box.yMin - padding + cornerLength);
+        this.effectCtx.lineTo(box.xMin - padding, box.yMin - padding);
+        this.effectCtx.lineTo(box.xMin - padding + cornerLength, box.yMin - padding);
+        this.effectCtx.stroke();
+        
+        // Top-right corner
+        this.effectCtx.beginPath();
+        this.effectCtx.moveTo(box.xMax + padding - cornerLength, box.yMin - padding);
+        this.effectCtx.lineTo(box.xMax + padding, box.yMin - padding);
+        this.effectCtx.lineTo(box.xMax + padding, box.yMin - padding + cornerLength);
+        this.effectCtx.stroke();
+        
+        // Bottom-left corner
+        this.effectCtx.beginPath();
+        this.effectCtx.moveTo(box.xMin - padding, box.yMax + padding - cornerLength);
+        this.effectCtx.lineTo(box.xMin - padding, box.yMax + padding);
+        this.effectCtx.lineTo(box.xMin - padding + cornerLength, box.yMax + padding);
+        this.effectCtx.stroke();
+        
+        // Bottom-right corner
+        this.effectCtx.beginPath();
+        this.effectCtx.moveTo(box.xMax + padding - cornerLength, box.yMax + padding);
+        this.effectCtx.lineTo(box.xMax + padding, box.yMax + padding);
+        this.effectCtx.lineTo(box.xMax + padding, box.yMax + padding - cornerLength);
+        this.effectCtx.stroke();
+        
+        // Add scanning effect
+        if (this.currentEffect === 'cyber' || this.currentEffect === 'hologram') {
+          const scanY = box.yMin + (box.yMax - box.yMin) * ((Date.now() % 2000) / 2000);
+          this.effectCtx.strokeStyle = this.getEffectColor('face');
+          this.effectCtx.globalAlpha = 0.5;
+          this.effectCtx.beginPath();
+          this.effectCtx.moveTo(box.xMin - padding, scanY);
+          this.effectCtx.lineTo(box.xMax + padding, scanY);
+          this.effectCtx.stroke();
+          this.effectCtx.globalAlpha = 1;
+        }
+        
+        // Add particles
+        if (Math.random() < 0.2) {
+          this.createParticle(
+            box.xMin + Math.random() * box.width,
+            box.yMin + Math.random() * box.height,
+            'face'
+          );
+        }
+      }
+
+      drawHand(hand) {
+        const keypoints = hand.keypoints;
+        const keypoints3D = hand.keypoints3D;
+        
+        // Define hand connections
+        const connections = [
+          [0, 1], [1, 2], [2, 3], [3, 4],  // Thumb
+          [0, 5], [5, 6], [6, 7], [7, 8],  // Index
+          [0, 9], [9, 10], [10, 11], [11, 12],  // Middle
+          [0, 13], [13, 14], [14, 15], [15, 16],  // Ring
+          [0, 17], [17, 18], [18, 19], [19, 20],  // Pinky
+          [5, 9], [9, 13], [13, 17]  // Palm
+        ];
+        
+        this.effectCtx.strokeStyle = this.getEffectColor('hand');
+        this.effectCtx.lineWidth = 2;
+        this.effectCtx.shadowBlur = 12;
+        this.effectCtx.shadowColor = this.getEffectColor('hand');
+        
+        // Draw connections
+        connections.forEach(([i, j]) => {
+          const kp1 = keypoints[i];
+          const kp2 = keypoints[j];
+          
+          this.effectCtx.beginPath();
+          this.effectCtx.moveTo(kp1.x, kp1.y);
+          this.effectCtx.lineTo(kp2.x, kp2.y);
+          this.effectCtx.stroke();
+        });
+        
+        // Draw keypoints with 3D depth effect
+        keypoints.forEach((keypoint, i) => {
+          const z = keypoints3D ? keypoints3D[i].z : 0;
+          const size = 3 + (z + 50) * 0.05; // Adjust size based on depth
+          
+          this.effectCtx.fillStyle = this.getEffectColor('hand');
+          this.effectCtx.beginPath();
+          this.effectCtx.arc(keypoint.x, keypoint.y, size, 0, Math.PI * 2);
+          this.effectCtx.fill();
+          
+          // Add glow effect for fingertips
+          if ([4, 8, 12, 16, 20].includes(i)) {
+            this.effectCtx.globalAlpha = 0.3;
+            this.effectCtx.beginPath();
+            this.effectCtx.arc(keypoint.x, keypoint.y, size * 2, 0, Math.PI * 2);
+            this.effectCtx.fill();
+            this.effectCtx.globalAlpha = 1;
+            
+            // Create particle trails
+            if (Math.random() < 0.5) {
+              this.createParticle(keypoint.x, keypoint.y, 'hand');
+            }
+          }
+        });
+      }
+
+      getEffectColor(type) {
+        const colors = {
+          cyber: { pose: '#00ffcc', face: '#ff00ff', hand: '#00ccff' },
+          matrix: { pose: '#00ff00', face: '#00ff00', hand: '#00ff00' },
+          hologram: { pose: '#00d4ff', face: '#00d4ff', hand: '#00d4ff' },
+          neural: { pose: '#ff6b00', face: '#ff0066', hand: '#6600ff' }
+        };
+        
+        return colors[this.currentEffect][type] || '#ffffff';
+      }
+
+      applyPostProcessing() {
+        // Apply effect-specific post-processing
+        switch (this.currentEffect) {
+          case 'matrix':
+            this.effectCtx.globalCompositeOperation = 'screen';
+            this.effectCtx.fillStyle = 'rgba(0, 255, 0, 0.05)';
+            this.effectCtx.fillRect(0, 0, this.effectCanvas.width, this.effectCanvas.height);
+            this.effectCtx.globalCompositeOperation = 'source-over';
+            break;
+          
+          case 'hologram':
+            // Add scan lines
+            this.effectCtx.strokeStyle = 'rgba(0, 212, 255, 0.1)';
+            this.effectCtx.lineWidth = 1;
+            for (let y = 0; y < this.effectCanvas.height; y += 4) {
+              this.effectCtx.beginPath();
+              this.effectCtx.moveTo(0, y);
+              this.effectCtx.lineTo(this.effectCanvas.width, y);
+              this.effectCtx.stroke();
+            }
+            break;
+          
+          case 'neural':
+            // Add neural network visualization overlay
+            this.effectCtx.globalAlpha = 0.05;
+            const gradient = this.effectCtx.createRadialGradient(
+              this.effectCanvas.width / 2, this.effectCanvas.height / 2, 0,
+              this.effectCanvas.width / 2, this.effectCanvas.height / 2, this.effectCanvas.width / 2
+            );
+            gradient.addColorStop(0, '#ff6b00');
+            gradient.addColorStop(0.5, '#ff0066');
+            gradient.addColorStop(1, '#6600ff');
+            this.effectCtx.fillStyle = gradient;
+            this.effectCtx.fillRect(0, 0, this.effectCanvas.width, this.effectCanvas.height);
+            this.effectCtx.globalAlpha = 1;
+            break;
+        }
+      }
+
+      async detect() {
+        if (!this.isRunning) return;
+        
+        const startTime = performance.now();
+        
+        try {
+          // Clear canvases
+          this.effectCtx.clearRect(0, 0, this.effectCanvas.width, this.effectCanvas.height);
+          
+          // Draw video frame
+          this.effectCtx.save();
+          this.effectCtx.globalAlpha = 0.8;
+          this.effectCtx.drawImage(this.video, 0, 0, this.effectCanvas.width, this.effectCanvas.height);
+          this.effectCtx.restore();
+          
+          // Run detections in parallel
+          const detectionPromises = [];
+          
+          if (this.models.pose && this.poseDetector) {
+            detectionPromises.push(this.poseDetector.estimatePoses(this.video));
+          }
+          
+          if (this.models.face && this.faceDetector) {
+            detectionPromises.push(this.faceDetector.estimateFaces(this.video));
+          }
+          
+          if (this.models.hand && this.handDetector) {
+            detectionPromises.push(this.handDetector.estimateHands(this.video));
+          }
+          
+          const results = await Promise.all(detectionPromises);
+          let resultIndex = 0;
+          
+          // Process poses
+          if (this.models.pose && this.poseDetector) {
+            const poses = results[resultIndex++];
+            poses.forEach(pose => this.drawPose(pose));
+            document.getElementById('poseCount').textContent = poses.length;
+          }
+          
+          // Process faces
+          if (this.models.face && this.faceDetector) {
+            const faces = results[resultIndex++];
+            faces.forEach(face => this.drawFace(face));
+            document.getElementById('faceCount').textContent = faces.length;
+          }
+          
+          // Process hands
+          if (this.models.hand && this.handDetector) {
+            const hands = results[resultIndex++];
+            hands.forEach(hand => this.drawHand(hand));
+            document.getElementById('handCount').textContent = hands.length;
+          }
+          
+          // Apply post-processing effects
+          this.applyPostProcessing();
+          
+          // Update particles
+          this.updateParticles();
+          
+          // Update stats
+          const latency = Math.round(performance.now() - startTime);
+          document.getElementById('latency').textContent = latency + 'ms';
+          
+          // Calculate FPS
+          this.frameCount++;
+          const currentTime = performance.now();
+          if (currentTime - this.lastTime >= 1000) {
+            this.fps = Math.round(this.frameCount * 1000 / (currentTime - this.lastTime));
+            document.getElementById('fps').textContent = this.fps;
+            this.frameCount = 0;
+            this.lastTime = currentTime;
+          }
+          
+        } catch (error) {
+          console.error('Detection error:', error);
+        }
+        
+        requestAnimationFrame(() => this.detect());
+      }
+
+      showError(message) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error-message';
+        errorDiv.innerHTML = `
+          <h3>Neural Interface Error</h3>
+          <p>${message}</p>
+          <button onclick="location.reload()" style="margin-top: 15px; padding: 10px 20px; background: white; color: #ff0064; border: none; border-radius: 20px; cursor: pointer; font-weight: 600;">Restart System</button>
+        `;
+        document.body.appendChild(errorDiv);
+      }
+
+      hideLoadingScreen() {
+        const loadingScreen = document.getElementById('loadingScreen');
+        loadingScreen.classList.add('hidden');
+        setTimeout(() => {
+          loadingScreen.style.display = 'none';
+        }, 800);
+      }
+
+      async start() {
+        try {
+          await this.setupCamera();
+          await this.video.play();
+          this.resizeCanvases();
+          await this.loadModels();
+          
+          this.updateProgress(100, 'Neural Vision Ready');
+          
+          setTimeout(() => {
+            this.hideLoadingScreen();
+            this.isRunning = true;
+            this.detect();
+          }, 500);
+          
+        } catch (error) {
+          console.error('Startup error:', error);
+        }
+      }
+    }
+
+    // Initialize the app
+    const app = new NeuralVisionApp();
+
+    // Check for WebGL and camera support
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      document.getElementById('loadingText').textContent = 'Neural Interface Not Supported';
+      document.getElementById('progressBar').style.display = 'none';
+    } else {
+      // Show start button after a brief delay
+      setTimeout(() => {
+        document.getElementById('startButton').style.display = 'block';
+        document.getElementById('loadingText').textContent = 'Ready to Initialize';
+      }, 1000);
+    }
+
+    // Handle page visibility
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        app.isRunning = false;
+      } else if (app.poseDetector && app.faceDetector && app.handDetector) {
+        app.isRunning = true;
+        app.detect();
+      }
+    });
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+      if (app.video.videoWidth > 0) {
+        app.resizeCanvases();
+      }
+    });
+  </script>
+</body>
+</html>
