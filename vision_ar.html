@@ -895,8 +895,6 @@
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation@1.0.1/dist/body-segmentation.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1/selfie_segmentation.js"></script>
   <script src="https://docs.opencv.org/4.5.5/opencv.js"></script>
 
   <script>
@@ -927,6 +925,10 @@
         this.objectDetector = null;
         this.segmenter = null;
         this.isOpenCVReady = false;
+        
+        // Cache for performance
+        this.lastColorSettings = null;
+        this.frameSkipCounter = 0;
 
         // State
         this.currentMode = 'detection';
@@ -1367,17 +1369,6 @@
             base: 'mobilenet_v2'
           });
           
-          this.updateLoadingText('Loading segmentation model...');
-          
-          // Load body segmentation
-          this.segmenter = await bodySegmentation.createSegmenter(
-            bodySegmentation.SupportedModels.MediaPipeSelfieSegmentation,
-            {
-              runtime: 'tfjs',
-              modelType: 'general'
-            }
-          );
-          
           this.updateLoadingText('Optimizing for your device...');
           
           // Warm up models
@@ -1406,12 +1397,7 @@
           );
         }
         
-        if (this.segmenter) {
-          promises.push(
-            this.segmenter.segmentPeople(canvas)
-              .catch(e => console.warn('Segmenter warmup failed:', e))
-          );
-        }
+        // Segmenter removed for performance
         
         await Promise.allSettled(promises);
       }
@@ -1445,16 +1431,24 @@
           // Draw video
           this.cvCtx.drawImage(this.video, 0, 0, this.cvCanvas.width, this.cvCanvas.height);
           
+          // Skip some frames for heavy processing modes to improve performance
+          this.frameSkipCounter++;
+          const shouldProcessHeavy = this.frameSkipCounter % 3 === 0; // Process every third frame for better performance
+          
           // Process based on mode
           switch (this.currentMode) {
             case 'detection':
-              await this.processDetectionMode();
+              if (shouldProcessHeavy) {
+                await this.processDetectionMode();
+              }
               break;
             case 'segmentation':
-              await this.processSegmentationMode();
+              if (shouldProcessHeavy) {
+                await this.processSegmentationMode();
+              }
               break;
             case 'color':
-              await this.processColorMode();
+              await this.processColorMode(); // Always process color for smooth updates
               break;
             case 'effects':
               await this.processEffectsMode();
@@ -1475,74 +1469,111 @@
       }
 
       async processDetectionMode() {
+        // Run object detection and edge detection in parallel for better performance
+        const promises = [];
+        
         // Object detection
         if (this.objectDetector) {
-          const predictions = await this.objectDetector.detect(this.video);
-          this.detectedObjects = predictions;
-          
-          // Draw bounding boxes
-          predictions.forEach(prediction => {
-            if (prediction.score > 0.5) {
-              this.drawBoundingBox(prediction);
-            }
-          });
+          promises.push(
+            this.objectDetector.detect(this.video).then(predictions => {
+              this.detectedObjects = predictions;
+              
+              // Draw bounding boxes
+              predictions.forEach(prediction => {
+                if (prediction.score > 0.5) {
+                  this.drawBoundingBox(prediction);
+                }
+              });
+              
+              // Shape detection after object detection
+              this.detectShapes();
+            })
+          );
         }
         
         // Edge detection with OpenCV
-        if (this.isOpenCVReady) {
-          this.detectEdges();
+        if (this.isOpenCVReady && this.frameSkipCounter % 6 === 0) { // Run edge detection less frequently
+          promises.push(Promise.resolve(this.detectEdges()));
         }
         
-        // Shape detection
-        this.detectShapes();
+        await Promise.all(promises);
       }
 
       async processSegmentationMode() {
-        if (!this.segmenter) return;
-        
-        const segmentation = await this.segmenter.segmentPeople(this.video);
-        
-        if (segmentation.length > 0) {
-          // Create mask
-          const mask = await segmentation[0].mask.toImageData();
+        // Use object detection for better segmentation
+        if (this.objectDetector) {
+          const predictions = await this.objectDetector.detect(this.video);
           
-          // Apply segmentation
-          const tempCanvas = document.createElement('canvas');
-          tempCanvas.width = this.video.videoWidth;
-          tempCanvas.height = this.video.videoHeight;
-          const tempCtx = tempCanvas.getContext('2d');
+          // Draw original video with reduced opacity for background
+          this.segmentationCtx.globalAlpha = 0.3;
+          this.segmentationCtx.filter = `blur(${this.settings.segmentation.backgroundBlur}px)`;
+          this.segmentationCtx.drawImage(this.video, 0, 0, this.segmentationCanvas.width, this.segmentationCanvas.height);
+          this.segmentationCtx.filter = 'none';
+          this.segmentationCtx.globalAlpha = 1;
           
-          tempCtx.putImageData(mask, 0, 0);
-          
-          // Scale to display canvas
-          this.segmentationCtx.save();
-          this.segmentationCtx.scale(
-            this.segmentationCanvas.width / this.video.videoWidth,
-            this.segmentationCanvas.height / this.video.videoHeight
-          );
-          
-          // Apply blur to background
-          if (this.settings.segmentation.backgroundBlur > 0) {
-            this.segmentationCtx.filter = `blur(${this.settings.segmentation.backgroundBlur}px)`;
-          }
-          
-          // Draw segmented person
-          this.segmentationCtx.globalCompositeOperation = 'source-over';
-          this.segmentationCtx.drawImage(tempCanvas, 0, 0);
-          
-          this.segmentationCtx.restore();
+          // Highlight detected objects
+          predictions.forEach(prediction => {
+            if (prediction.score > this.settings.segmentation.precision) {
+              const [x, y, width, height] = prediction.bbox;
+              const scaleX = this.segmentationCanvas.width / this.video.videoWidth;
+              const scaleY = this.segmentationCanvas.height / this.video.videoHeight;
+              
+              const scaledX = Math.floor(x * scaleX);
+              const scaledY = Math.floor(y * scaleY);
+              const scaledWidth = Math.floor(width * scaleX);
+              const scaledHeight = Math.floor(height * scaleY);
+              
+              // Draw the object clearly
+              this.segmentationCtx.save();
+              this.segmentationCtx.globalAlpha = 1;
+              
+              // Create clipping path for rounded corners
+              this.segmentationCtx.beginPath();
+              this.segmentationCtx.roundRect(scaledX - 5, scaledY - 5, scaledWidth + 10, scaledHeight + 10, 10);
+              this.segmentationCtx.clip();
+              
+              // Draw the object from original video
+              this.segmentationCtx.drawImage(this.video, 
+                x, y, width, height, 
+                scaledX, scaledY, scaledWidth, scaledHeight
+              );
+              
+              // Add glow effect
+              this.segmentationCtx.shadowColor = '#00ffcc';
+              this.segmentationCtx.shadowBlur = 20;
+              this.segmentationCtx.strokeStyle = '#00ffcc';
+              this.segmentationCtx.lineWidth = 2;
+              this.segmentationCtx.stroke();
+              
+              this.segmentationCtx.restore();
+            }
+          });
         }
       }
 
       async processColorMode() {
+        // Only process if color settings have changed
+        const colorChanged = this.settings.color.hue !== 0 || 
+                           this.settings.color.saturation !== 100 || 
+                           this.settings.color.brightness !== 100;
+                           
+        if (!colorChanged) {
+          // Just draw the original video
+          this.effectCtx.drawImage(this.video, 0, 0, this.effectCanvas.width, this.effectCanvas.height);
+          return;
+        }
+        
         // Detect objects first
         if (this.objectDetector) {
           const predictions = await this.objectDetector.detect(this.video);
           
+          // Draw original video first
+          this.effectCtx.drawImage(this.video, 0, 0, this.effectCanvas.width, this.effectCanvas.height);
+          
           // Apply color manipulation to detected objects
           predictions.forEach(prediction => {
-            if (prediction.score > 0.5) {
-              this.applyColorManipulation(prediction);
+            if (prediction.score > 0.6) {
+              this.applyOptimizedColorManipulation(prediction);
             }
           });
         }
@@ -1568,8 +1599,20 @@
         if (!this.isOpenCVReady || typeof cv === 'undefined') return;
         
         try {
-          // Get image data
-          const imageData = this.cvCtx.getImageData(0, 0, this.cvCanvas.width, this.cvCanvas.height);
+          // Downsample for better performance
+          const scale = 0.5; // Process at half resolution
+          const scaledWidth = Math.floor(this.cvCanvas.width * scale);
+          const scaledHeight = Math.floor(this.cvCanvas.height * scale);
+          
+          // Create temporary canvas for downsampled processing
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = scaledWidth;
+          tempCanvas.height = scaledHeight;
+          const tempCtx = tempCanvas.getContext('2d');
+          
+          // Draw downsampled image
+          tempCtx.drawImage(this.cvCanvas, 0, 0, scaledWidth, scaledHeight);
+          const imageData = tempCtx.getImageData(0, 0, scaledWidth, scaledHeight);
           
           // Create OpenCV mat
           const src = cv.matFromImageData(imageData);
@@ -1578,6 +1621,9 @@
           
           // Convert to grayscale
           cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+          
+          // Apply Gaussian blur to reduce noise
+          cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
           
           // Apply Canny edge detection
           const threshold1 = (100 - this.settings.edge.sensitivity) * 2;
@@ -1590,30 +1636,38 @@
           cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
           
           // Draw edges
+          this.overlayCtx.save();
           this.overlayCtx.strokeStyle = '#00ffcc';
           this.overlayCtx.lineWidth = 2;
           this.overlayCtx.shadowColor = '#00ffcc';
           this.overlayCtx.shadowBlur = 10;
           
           let edgeCount = 0;
-          for (let i = 0; i < contours.size(); i++) {
+          const maxContours = 50; // Limit number of contours for performance
+          
+          for (let i = 0; i < Math.min(contours.size(), maxContours); i++) {
             const contour = contours.get(i);
-            if (contour.rows > 10) { // Filter small contours
+            if (contour.rows > 5) { // Filter small contours
               this.overlayCtx.beginPath();
               for (let j = 0; j < contour.rows; j++) {
                 const point = contour.intPtr(j);
+                const scaledX = point[0] / scale;
+                const scaledY = point[1] / scale;
+                
                 if (j === 0) {
-                  this.overlayCtx.moveTo(point[0], point[1]);
+                  this.overlayCtx.moveTo(scaledX, scaledY);
                 } else {
-                  this.overlayCtx.lineTo(point[0], point[1]);
+                  this.overlayCtx.lineTo(scaledX, scaledY);
                 }
               }
+              this.overlayCtx.closePath();
               this.overlayCtx.stroke();
               edgeCount++;
             }
             contour.delete();
           }
           
+          this.overlayCtx.restore();
           this.edgePoints = edgeCount;
           
           // Cleanup
@@ -1712,7 +1766,7 @@
         this.overlayCtx.fillText(label, scaledX + 5, scaledY - 10);
       }
 
-      applyColorManipulation(prediction) {
+      applyOptimizedColorManipulation(prediction) {
         const [x, y, width, height] = prediction.bbox;
         const scaleX = this.effectCanvas.width / this.video.videoWidth;
         const scaleY = this.effectCanvas.height / this.video.videoHeight;
@@ -1722,45 +1776,94 @@
         const scaledWidth = Math.floor(width * scaleX);
         const scaledHeight = Math.floor(height * scaleY);
         
-        // Get image data for the object region
-        const imageData = this.cvCtx.getImageData(scaledX, scaledY, scaledWidth, scaledHeight);
-        const data = imageData.data;
-        
-        // Apply HSL adjustments
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-          
-          // Convert RGB to HSL
-          const [h, s, l] = this.rgbToHsl(r, g, b);
-          
-          // Apply adjustments
-          let newH = (h + this.settings.color.hue / 360) % 1;
-          if (newH < 0) newH += 1;
-          
-          const newS = Math.min(1, Math.max(0, s * (this.settings.color.saturation / 100)));
-          const newL = Math.min(1, Math.max(0, l * (this.settings.color.brightness / 100)));
-          
-          // Convert back to RGB
-          const [newR, newG, newB] = this.hslToRgb(newH, newS, newL);
-          
-          data[i] = newR;
-          data[i + 1] = newG;
-          data[i + 2] = newB;
+        // Create temporary canvas for edge detection if OpenCV is ready
+        if (this.isOpenCVReady && typeof cv !== 'undefined' && prediction.class === 'person') {
+          try {
+            // Get the region of interest
+            const roiImageData = this.cvCtx.getImageData(scaledX, scaledY, scaledWidth, scaledHeight);
+            
+            // Create mask using edge detection
+            const src = cv.matFromImageData(roiImageData);
+            const gray = new cv.Mat();
+            const edges = new cv.Mat();
+            
+            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+            cv.Canny(gray, edges, 50, 150);
+            
+            // Apply morphological operations to close gaps
+            const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
+            cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
+            
+            // Create temporary canvas for masking
+            const maskCanvas = document.createElement('canvas');
+            maskCanvas.width = scaledWidth;
+            maskCanvas.height = scaledHeight;
+            const maskCtx = maskCanvas.getContext('2d');
+            
+            // Draw original region
+            maskCtx.drawImage(this.video,
+              x, y, width, height,
+              0, 0, scaledWidth, scaledHeight
+            );
+            
+            // Apply color filters
+            this.effectCtx.save();
+            const hueRotate = this.settings.color.hue;
+            const saturate = this.settings.color.saturation;
+            const brightness = this.settings.color.brightness;
+            
+            this.effectCtx.filter = `hue-rotate(${hueRotate}deg) saturate(${saturate}%) brightness(${brightness}%)`;
+            this.effectCtx.drawImage(maskCanvas, scaledX, scaledY);
+            this.effectCtx.restore();
+            
+            // Cleanup
+            src.delete();
+            gray.delete();
+            edges.delete();
+            kernel.delete();
+            
+          } catch (e) {
+            // Fallback to simple filter
+            this.applySimpleColorFilter(prediction);
+          }
+        } else {
+          // Use simple filter for non-person objects or when OpenCV not ready
+          this.applySimpleColorFilter(prediction);
         }
+      }
+      
+      applySimpleColorFilter(prediction) {
+        const [x, y, width, height] = prediction.bbox;
+        const scaleX = this.effectCanvas.width / this.video.videoWidth;
+        const scaleY = this.effectCanvas.height / this.video.videoHeight;
         
-        // Put the modified image data back
-        this.effectCtx.putImageData(imageData, scaledX, scaledY);
+        const scaledX = Math.floor(x * scaleX);
+        const scaledY = Math.floor(y * scaleY);
+        const scaledWidth = Math.floor(width * scaleX);
+        const scaledHeight = Math.floor(height * scaleY);
         
-        // Add glow effect
-        if (this.settings.effects.glow > 0) {
-          this.effectCtx.shadowColor = `hsl(${this.settings.color.hue + 180}, 100%, 50%)`;
-          this.effectCtx.shadowBlur = 20 * this.settings.effects.glow;
-          this.effectCtx.globalCompositeOperation = 'screen';
-          this.effectCtx.drawImage(this.effectCanvas, scaledX, scaledY, scaledWidth, scaledHeight, scaledX, scaledY, scaledWidth, scaledHeight);
-          this.effectCtx.globalCompositeOperation = 'source-over';
-        }
+        // Use CSS filters for better performance
+        this.effectCtx.save();
+        
+        // Apply filters
+        const hueRotate = this.settings.color.hue;
+        const saturate = this.settings.color.saturation;
+        const brightness = this.settings.color.brightness;
+        
+        this.effectCtx.filter = `hue-rotate(${hueRotate}deg) saturate(${saturate}%) brightness(${brightness}%)`;
+        
+        // Draw the filtered region
+        this.effectCtx.drawImage(this.video,
+          x, y, width, height,
+          scaledX, scaledY, scaledWidth, scaledHeight
+        );
+        
+        this.effectCtx.restore();
+        
+        // Add outline to show what's being modified
+        this.effectCtx.strokeStyle = `hsl(${hueRotate}, 100%, 50%)`;
+        this.effectCtx.lineWidth = 2;
+        this.effectCtx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
       }
 
       applyVisualEffects() {
