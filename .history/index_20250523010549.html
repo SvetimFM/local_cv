@@ -1,0 +1,1880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#000000">
+  <title>Neural Vision - AI Computer Vision</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+      background: #000;
+      overflow: hidden;
+      color: #fff;
+      position: fixed;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+
+    #mainContainer {
+      position: fixed;
+      width: 100%;
+      height: 100%;
+      background: #000;
+    }
+
+    video, canvas {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #video {
+      display: none;
+    }
+
+    #effectCanvas {
+      z-index: 10;
+    }
+
+    #overlayCanvas {
+      z-index: 15;
+      pointer-events: none;
+    }
+
+    /* Loading screen */
+    #loadingScreen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+      transition: opacity 0.8s ease;
+      padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom);
+    }
+
+    #loadingScreen.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .logo-container {
+      margin-bottom: 60px;
+      position: relative;
+    }
+
+    .logo-text {
+      font-size: 42px;
+      font-weight: 800;
+      letter-spacing: -2px;
+      background: linear-gradient(135deg, #00ffcc 0%, #ff00ff 50%, #00ccff 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+
+    .logo-subtitle {
+      font-size: 16px;
+      font-weight: 400;
+      color: #666;
+      text-align: center;
+      letter-spacing: 2px;
+    }
+
+    .neural-loader {
+      width: 100px;
+      height: 100px;
+      position: relative;
+      margin-bottom: 40px;
+    }
+
+    .neural-dot {
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      background: #00ffcc;
+      border-radius: 50%;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    @keyframes orbit {
+      to { transform: rotate(360deg) translateX(40px) rotate(-360deg); }
+    }
+
+    .neural-dot:nth-child(1) { animation: orbit 2s linear infinite; }
+    .neural-dot:nth-child(2) { animation: orbit 2s linear infinite 0.4s; background: #ff00ff; }
+    .neural-dot:nth-child(3) { animation: orbit 2s linear infinite 0.8s; background: #00ccff; }
+    .neural-dot:nth-child(4) { animation: orbit 2s linear infinite 1.2s; background: #ffcc00; }
+    .neural-dot:nth-child(5) { animation: orbit 2s linear infinite 1.6s; background: #ff6600; }
+
+    .loading-status {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 20px;
+      min-height: 20px;
+    }
+
+    .start-button {
+      background: linear-gradient(135deg, #00ffcc, #ff00ff);
+      border: none;
+      color: white;
+      padding: 18px 60px;
+      font-size: 17px;
+      font-weight: 600;
+      border-radius: 30px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 8px 32px rgba(0, 255, 204, 0.3);
+      touch-action: manipulation;
+      letter-spacing: 0.5px;
+    }
+
+    .start-button:active {
+      transform: scale(0.98);
+    }
+
+    /* Bottom controls - redesigned for iPhone */
+    #bottomControls {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(20, 20, 20, 0.95);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      padding-bottom: env(safe-area-inset-bottom);
+      transform: translateY(calc(100% - 90px - env(safe-area-inset-bottom)));
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 100;
+      border-radius: 20px 20px 0 0;
+    }
+
+    #bottomControls.expanded {
+      transform: translateY(0);
+    }
+
+    .control-pill {
+      width: 60px;
+      height: 5px;
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 3px;
+      margin: 12px auto 16px;
+    }
+
+    .control-tabs {
+      display: flex;
+      padding: 0 20px 16px;
+      gap: 12px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+
+    .control-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .control-tab {
+      flex: 0 0 auto;
+      padding: 10px 20px;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      border-radius: 20px;
+      color: #999;
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+      touch-action: manipulation;
+    }
+
+    .control-tab.active {
+      background: rgba(0, 255, 204, 0.2);
+      color: #00ffcc;
+    }
+
+    .control-content {
+      padding: 0 20px 20px;
+      max-height: 50vh;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .control-section {
+      display: none;
+    }
+
+    .control-section.active {
+      display: block;
+    }
+
+    .model-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .model-card {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      border: 2px solid transparent;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .model-card:active {
+      transform: scale(0.98);
+    }
+
+    .model-card.active {
+      background: rgba(0, 255, 204, 0.1);
+      border-color: rgba(0, 255, 204, 0.5);
+    }
+
+    .model-card.active::before {
+      content: '';
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 8px;
+      height: 8px;
+      background: #00ffcc;
+      border-radius: 50%;
+      box-shadow: 0 0 10px rgba(0, 255, 204, 0.8);
+    }
+
+    .model-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+
+    .model-name {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .model-desc {
+      font-size: 12px;
+      color: #666;
+    }
+
+    .effect-scroller {
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 4px 0;
+      margin: 0 -20px 20px;
+      padding: 0 20px;
+    }
+
+    .effect-scroller::-webkit-scrollbar {
+      display: none;
+    }
+
+    .effect-card {
+      flex: 0 0 auto;
+      width: 120px;
+      height: 80px;
+      border-radius: 12px;
+      background-size: cover;
+      background-position: center;
+      position: relative;
+      cursor: pointer;
+      overflow: hidden;
+      border: 2px solid transparent;
+      transition: all 0.2s ease;
+    }
+
+    .effect-card:active {
+      transform: scale(0.95);
+    }
+
+    .effect-card.active {
+      border-color: #00ffcc;
+    }
+
+    .effect-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
+    }
+
+    .effect-name {
+      position: absolute;
+      bottom: 8px;
+      left: 12px;
+      font-size: 14px;
+      font-weight: 600;
+      color: white;
+      z-index: 1;
+    }
+
+    /* Top bar */
+    #topBar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: env(safe-area-inset-top) 20px 12px;
+      padding-top: max(env(safe-area-inset-top), 20px);
+      background: linear-gradient(180deg, rgba(0,0,0,0.8) 0%, transparent 100%);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 90;
+    }
+
+    .status-badge {
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(10px);
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      background: #00ff00;
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(1.5); }
+    }
+
+    .action-button {
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      border: none;
+      width: 40px;
+      height: 40px;
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .action-button:active {
+      transform: scale(0.9);
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    /* Floating capture button */
+    .capture-button {
+      position: fixed;
+      bottom: calc(110px + env(safe-area-inset-bottom));
+      left: 50%;
+      transform: translateX(-50%);
+      width: 70px;
+      height: 70px;
+      background: linear-gradient(135deg, #00ffcc, #ff00ff);
+      border: 4px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      transition: all 0.3s ease;
+      z-index: 95;
+    }
+
+    .capture-button:active {
+      transform: translateX(-50%) scale(0.9);
+    }
+
+    .capture-button::after {
+      content: '';
+      width: 50%;
+      height: 50%;
+      background: white;
+      border-radius: 50%;
+    }
+
+    /* Notification */
+    #notification {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 80px);
+      left: 50%;
+      transform: translateX(-50%) translateY(-100px);
+      background: rgba(20, 20, 20, 0.95);
+      backdrop-filter: blur(20px);
+      color: white;
+      padding: 16px 24px;
+      border-radius: 24px;
+      font-size: 15px;
+      font-weight: 500;
+      opacity: 0;
+      transition: all 0.3s ease;
+      z-index: 1000;
+      max-width: 90%;
+      text-align: center;
+    }
+
+    #notification.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+
+    /* Performance slider */
+    .slider-container {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .slider-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .slider-label {
+      font-size: 15px;
+      font-weight: 500;
+    }
+
+    .slider-value {
+      font-size: 15px;
+      color: #00ffcc;
+      font-weight: 600;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      height: 44px;
+      background: transparent;
+      outline: none;
+      -webkit-appearance: none;
+      cursor: pointer;
+    }
+
+    input[type="range"]::-webkit-slider-track {
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 24px;
+      height: 24px;
+      background: #00ffcc;
+      border-radius: 50%;
+      cursor: pointer;
+      margin-top: -9px;
+      box-shadow: 0 2px 10px rgba(0, 255, 204, 0.5);
+    }
+
+    /* Error state */
+    .error-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.95);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 40px;
+      z-index: 2000;
+      text-align: center;
+    }
+
+    .error-icon {
+      font-size: 64px;
+      margin-bottom: 24px;
+    }
+
+    .error-title {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .error-message {
+      font-size: 16px;
+      color: #999;
+      margin-bottom: 32px;
+      line-height: 1.5;
+    }
+
+    .error-button {
+      background: white;
+      color: black;
+      border: none;
+      padding: 16px 32px;
+      border-radius: 24px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* Optimize for iPhone X and newer */
+    @supports (padding: max(0px)) {
+      #bottomControls {
+        padding-bottom: max(env(safe-area-inset-bottom), 20px);
+      }
+    }
+
+    /* Dark mode optimizations */
+    @media (prefers-color-scheme: dark) {
+      .control-pill {
+        background: rgba(255, 255, 255, 0.2);
+      }
+    }
+
+    /* Reduced motion */
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="mainContainer">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="effectCanvas"></canvas>
+    <canvas id="overlayCanvas"></canvas>
+  </div>
+
+  <div id="loadingScreen">
+    <div class="logo-container">
+      <div class="logo-text">Neural Vision</div>
+      <div class="logo-subtitle">AI COMPUTER VISION</div>
+    </div>
+    <div class="neural-loader">
+      <div class="neural-dot"></div>
+      <div class="neural-dot"></div>
+      <div class="neural-dot"></div>
+      <div class="neural-dot"></div>
+      <div class="neural-dot"></div>
+    </div>
+    <div class="loading-status" id="loadingStatus">Initializing...</div>
+    <button class="start-button" id="startButton" style="display: none;">Start Experience</button>
+  </div>
+
+  <!-- Top Status Bar -->
+  <div id="topBar" style="display: none;">
+    <div class="status-badge">
+      <div class="status-dot"></div>
+      <span id="fpsValue">60</span> FPS
+    </div>
+    <button class="action-button" id="flipCamera">
+      <svg width="20" height="20" fill="white" viewBox="0 0 20 20">
+        <path d="M4 5h3l2-2h6l2 2h3a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1z"/>
+        <path d="M12 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Capture Button -->
+  <button class="capture-button" id="captureButton" style="display: none;"></button>
+
+  <!-- Bottom Controls -->
+  <div id="bottomControls" style="display: none;">
+    <div class="control-pill"></div>
+    
+    <div class="control-tabs">
+      <button class="control-tab active" data-tab="models">Models</button>
+      <button class="control-tab" data-tab="effects">Effects</button>
+      <button class="control-tab" data-tab="performance">Performance</button>
+    </div>
+
+    <div class="control-content">
+      <!-- Models Section -->
+      <div class="control-section active" id="modelsSection">
+        <div class="model-grid">
+          <div class="model-card active" data-model="pose">
+            <div class="model-icon">🏃</div>
+            <div class="model-name">Pose</div>
+            <div class="model-desc">Body tracking</div>
+          </div>
+          <div class="model-card active" data-model="face">
+            <div class="model-icon">😊</div>
+            <div class="model-name">Face</div>
+            <div class="model-desc">Face detection</div>
+          </div>
+          <div class="model-card active" data-model="hand">
+            <div class="model-icon">✋</div>
+            <div class="model-name">Hands</div>
+            <div class="model-desc">Hand tracking</div>
+          </div>
+          <div class="model-card active" data-model="object">
+            <div class="model-icon">📦</div>
+            <div class="model-name">Objects</div>
+            <div class="model-desc">Object detection</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Effects Section -->
+      <div class="control-section" id="effectsSection">
+        <div class="effect-scroller">
+          <div class="effect-card active" data-effect="cyber" style="background: linear-gradient(135deg, #00ffcc, #ff00ff);">
+            <div class="effect-name">Cyber</div>
+          </div>
+          <div class="effect-card" data-effect="hologram" style="background: linear-gradient(135deg, #00d4ff, #0066ff);">
+            <div class="effect-name">Hologram</div>
+          </div>
+          <div class="effect-card" data-effect="matrix" style="background: linear-gradient(135deg, #00ff00, #003300);">
+            <div class="effect-name">Matrix</div>
+          </div>
+          <div class="effect-card" data-effect="thermal" style="background: linear-gradient(135deg, #ff0000, #ffff00);">
+            <div class="effect-name">Thermal</div>
+          </div>
+          <div class="effect-card" data-effect="minimal" style="background: linear-gradient(135deg, #ffffff, #333333);">
+            <div class="effect-name">Minimal</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Performance Section -->
+      <div class="control-section" id="performanceSection">
+        <div class="slider-container">
+          <div class="slider-header">
+            <span class="slider-label">Quality</span>
+            <span class="slider-value" id="qualityValue">Balanced</span>
+          </div>
+          <input type="range" id="qualitySlider" min="0" max="2" step="1" value="1">
+        </div>
+
+        <div class="slider-container">
+          <div class="slider-header">
+            <span class="slider-label">Detection Threshold</span>
+            <span class="slider-value" id="thresholdValue">50%</span>
+          </div>
+          <input type="range" id="thresholdSlider" min="30" max="80" step="10" value="50">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification Toast -->
+  <div id="notification"></div>
+
+  <!-- Scripts - Load in correct order -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.0/dist/pose-detection.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-detection@1.0.2/dist/face-detection.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.0/dist/hand-pose-detection.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1635988162/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/face_detection.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
+
+  <script>
+    class NeuralVisionApp {
+      constructor() {
+        this.video = document.getElementById('video');
+        this.effectCanvas = document.getElementById('effectCanvas');
+        this.effectCtx = this.effectCanvas.getContext('2d', { 
+          alpha: false, 
+          willReadFrequently: false
+        });
+        this.overlayCanvas = document.getElementById('overlayCanvas');
+        this.overlayCtx = this.overlayCanvas.getContext('2d', { 
+          alpha: true,
+          willReadFrequently: false 
+        });
+        
+        // Models
+        this.models = {
+          pose: { detector: null, enabled: true },
+          face: { detector: null, enabled: true },
+          hand: { detector: null, enabled: true },
+          object: { detector: null, enabled: true }
+        };
+        
+        // State
+        this.isRunning = false;
+        this.currentEffect = 'cyber';
+        this.qualityMode = 1; // 0: Speed, 1: Balanced, 2: Quality
+        this.confidenceThreshold = 0.5;
+        this.facingMode = 'user';
+        
+        // Performance
+        this.frameSkip = 1;
+        this.frameCounter = 0;
+        this.lastDetectionTime = 0;
+        this.detectionInterval = 50; // Start conservative
+        
+        // FPS tracking
+        this.frameCount = 0;
+        this.lastTime = performance.now();
+        this.fps = 60;
+        
+        // Smoothing for better mobile experience
+        this.previousDetections = {
+          poses: [],
+          faces: [],
+          hands: [],
+          objects: []
+        };
+        
+        // Visual effects cache
+        this.effectStyles = {
+          cyber: {
+            pose: { color: '#00ffcc', shadow: '#00ffcc', width: 3 },
+            face: { color: '#ff00ff', shadow: '#ff00ff', width: 3 },
+            hand: { color: '#00ccff', shadow: '#00ccff', width: 2 },
+            object: { color: '#ffcc00', shadow: '#ffcc00', width: 3 }
+          },
+          hologram: {
+            pose: { color: '#00d4ff', shadow: '#0099ff', width: 2 },
+            face: { color: '#00d4ff', shadow: '#0099ff', width: 2 },
+            hand: { color: '#66ddff', shadow: '#0099ff', width: 2 },
+            object: { color: '#00aaff', shadow: '#0099ff', width: 2 }
+          },
+          matrix: {
+            pose: { color: '#00ff00', shadow: '#00ff00', width: 2 },
+            face: { color: '#00ff00', shadow: '#00ff00', width: 2 },
+            hand: { color: '#00ff00', shadow: '#00ff00', width: 2 },
+            object: { color: '#00ff00', shadow: '#00ff00', width: 2 }
+          },
+          thermal: {
+            pose: { color: '#ff0000', shadow: '#ff6600', width: 3 },
+            face: { color: '#ffff00', shadow: '#ff6600', width: 3 },
+            hand: { color: '#ff6600', shadow: '#ff0000', width: 3 },
+            object: { color: '#ff3300', shadow: '#ff0000', width: 3 }
+          },
+          minimal: {
+            pose: { color: '#ffffff', shadow: 'transparent', width: 1 },
+            face: { color: '#ffffff', shadow: 'transparent', width: 1 },
+            hand: { color: '#ffffff', shadow: 'transparent', width: 1 },
+            object: { color: '#ffffff', shadow: 'transparent', width: 1 }
+          }
+        };
+        
+        // Debouncing and error handling
+        this.errorCount = 0;
+        this.maxErrors = 5;
+        
+        this.initializeApp();
+      }
+
+      initializeApp() {
+        // Check for required APIs
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          this.showError('Browser Not Supported', 'Please use Safari or Chrome on iOS.');
+          return;
+        }
+        
+        this.setupEventListeners();
+        this.setupTouchGestures();
+        this.handleOrientation();
+        
+        // Check for iOS to optimize
+        this.isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        if (this.isIOS) {
+          // iOS specific optimizations
+          document.body.style.webkitTouchCallout = 'none';
+          document.body.style.webkitUserSelect = 'none';
+        }
+      }
+
+      setupEventListeners() {
+        // Start button
+        const startBtn = document.getElementById('startButton');
+        if (startBtn) {
+          startBtn.addEventListener('click', () => this.start());
+        }
+        
+        // Bottom controls swipe
+        const controls = document.getElementById('bottomControls');
+        const controlPill = controls.querySelector('.control-pill');
+        
+        let startY = 0;
+        let isDragging = false;
+        
+        const handleStart = (e) => {
+          const touch = e.touches ? e.touches[0] : e;
+          startY = touch.clientY;
+          isDragging = true;
+        };
+        
+        const handleMove = (e) => {
+          if (!isDragging) return;
+          e.preventDefault();
+          
+          const touch = e.touches ? e.touches[0] : e;
+          const deltaY = startY - touch.clientY;
+          
+          if (Math.abs(deltaY) > 50) {
+            controls.classList.toggle('expanded', deltaY > 0);
+            isDragging = false;
+          }
+        };
+        
+        const handleEnd = () => {
+          isDragging = false;
+        };
+        
+        controlPill.addEventListener('touchstart', handleStart, { passive: true });
+        controlPill.addEventListener('touchmove', handleMove, { passive: false });
+        controlPill.addEventListener('touchend', handleEnd);
+        
+        // Control tabs
+        document.querySelectorAll('.control-tab').forEach(tab => {
+          tab.addEventListener('click', (e) => {
+            e.preventDefault();
+            
+            document.querySelectorAll('.control-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.control-section').forEach(s => s.classList.remove('active'));
+            
+            tab.classList.add('active');
+            const section = document.getElementById(`${tab.dataset.tab}Section`);
+            if (section) {
+              section.classList.add('active');
+            }
+            
+            // Auto expand on tab switch
+            controls.classList.add('expanded');
+          });
+        });
+        
+        // Model cards
+        document.querySelectorAll('.model-card').forEach(card => {
+          card.addEventListener('click', (e) => {
+            e.preventDefault();
+            const model = card.dataset.model;
+            card.classList.toggle('active');
+            this.models[model].enabled = card.classList.contains('active');
+            
+            // Haptic feedback on iOS
+            if (this.isIOS && 'vibrate' in navigator) {
+              navigator.vibrate(10);
+            }
+          });
+        });
+        
+        // Effect cards
+        document.querySelectorAll('.effect-card').forEach(card => {
+          card.addEventListener('click', (e) => {
+            e.preventDefault();
+            document.querySelectorAll('.effect-card').forEach(c => c.classList.remove('active'));
+            card.classList.add('active');
+            this.currentEffect = card.dataset.effect;
+            this.showNotification(`Effect: ${card.dataset.effect.charAt(0).toUpperCase() + card.dataset.effect.slice(1)}`);
+          });
+        });
+        
+        // Camera flip
+        const flipBtn = document.getElementById('flipCamera');
+        if (flipBtn) {
+          flipBtn.addEventListener('click', () => this.flipCamera());
+        }
+        
+        // Capture button
+        const captureBtn = document.getElementById('captureButton');
+        if (captureBtn) {
+          captureBtn.addEventListener('click', () => this.capturePhoto());
+        }
+        
+        // Performance sliders
+        const qualitySlider = document.getElementById('qualitySlider');
+        if (qualitySlider) {
+          qualitySlider.addEventListener('input', (e) => {
+            this.qualityMode = parseInt(e.target.value);
+            const modes = ['Speed', 'Balanced', 'Quality'];
+            document.getElementById('qualityValue').textContent = modes[this.qualityMode];
+            this.updatePerformanceSettings();
+          });
+        }
+        
+        const thresholdSlider = document.getElementById('thresholdSlider');
+        if (thresholdSlider) {
+          thresholdSlider.addEventListener('input', (e) => {
+            this.confidenceThreshold = e.target.value / 100;
+            document.getElementById('thresholdValue').textContent = `${e.target.value}%`;
+          });
+        }
+      }
+
+      setupTouchGestures() {
+        const container = document.getElementById('mainContainer');
+        let lastTap = 0;
+        
+        // Double tap to switch effects
+        container.addEventListener('touchstart', (e) => {
+          const currentTime = Date.now();
+          const tapLength = currentTime - lastTap;
+          
+          if (tapLength < 300 && tapLength > 0) {
+            e.preventDefault();
+            this.cycleEffects();
+          }
+          lastTap = currentTime;
+        }, { passive: false });
+        
+        // Swipe up from bottom to show controls
+        let touchStartY = 0;
+        container.addEventListener('touchstart', (e) => {
+          touchStartY = e.touches[0].clientY;
+        }, { passive: true });
+        
+        container.addEventListener('touchend', (e) => {
+          const touchEndY = e.changedTouches[0].clientY;
+          const deltaY = touchStartY - touchEndY;
+          
+          if (deltaY > 100 && touchEndY > window.innerHeight * 0.7) {
+            document.getElementById('bottomControls').classList.add('expanded');
+          }
+        }, { passive: true });
+      }
+
+      handleOrientation() {
+        window.addEventListener('orientationchange', () => {
+          setTimeout(() => this.resizeCanvases(), 100);
+        });
+        
+        window.addEventListener('resize', () => this.resizeCanvases());
+      }
+
+      updatePerformanceSettings() {
+        switch(this.qualityMode) {
+          case 0: // Speed
+            this.frameSkip = 2;
+            this.detectionInterval = 100;
+            break;
+          case 1: // Balanced
+            this.frameSkip = 1;
+            this.detectionInterval = 66;
+            break;
+          case 2: // Quality
+            this.frameSkip = 0;
+            this.detectionInterval = 33;
+            break;
+        }
+      }
+
+      cycleEffects() {
+        const effects = ['cyber', 'hologram', 'matrix', 'thermal', 'minimal'];
+        const currentIndex = effects.indexOf(this.currentEffect);
+        const nextIndex = (currentIndex + 1) % effects.length;
+        this.currentEffect = effects[nextIndex];
+        
+        // Update UI
+        document.querySelectorAll('.effect-card').forEach(card => {
+          card.classList.toggle('active', card.dataset.effect === this.currentEffect);
+        });
+        
+        this.showNotification(`Effect: ${this.currentEffect.charAt(0).toUpperCase() + this.currentEffect.slice(1)}`);
+      }
+
+      async flipCamera() {
+        try {
+          this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+          await this.setupCamera();
+          this.showNotification(`Camera: ${this.facingMode === 'user' ? 'Front' : 'Back'}`);
+        } catch (error) {
+          console.error('Camera flip error:', error);
+          this.showNotification('Camera switch failed');
+        }
+      }
+
+      async capturePhoto() {
+        try {
+          // Haptic feedback
+          if ('vibrate' in navigator) {
+            navigator.vibrate(50);
+          }
+          
+          // Flash effect
+          this.overlayCtx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+          this.overlayCtx.fillRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+          setTimeout(() => {
+            this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+          }, 100);
+          
+          // Create composite image
+          const canvas = document.createElement('canvas');
+          canvas.width = this.effectCanvas.width;
+          canvas.height = this.effectCanvas.height;
+          const ctx = canvas.getContext('2d');
+          
+          // Draw video frame and effects
+          ctx.drawImage(this.effectCanvas, 0, 0);
+          ctx.drawImage(this.overlayCanvas, 0, 0);
+          
+          // Convert to blob and download
+          canvas.toBlob((blob) => {
+            if (!blob) {
+              this.showNotification('Capture failed');
+              return;
+            }
+            
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `neural-vision-${Date.now()}.jpg`;
+            a.click();
+            
+            setTimeout(() => URL.revokeObjectURL(url), 100);
+          }, 'image/jpeg', 0.9);
+          
+          this.showNotification('Photo captured!');
+        } catch (error) {
+          console.error('Capture error:', error);
+          this.showNotification('Capture failed');
+        }
+      }
+
+      showNotification(message) {
+        const notification = document.getElementById('notification');
+        if (!notification) return;
+        
+        notification.textContent = message;
+        notification.classList.add('show');
+        
+        if (this.notificationTimeout) {
+          clearTimeout(this.notificationTimeout);
+        }
+        
+        this.notificationTimeout = setTimeout(() => {
+          notification.classList.remove('show');
+        }, 2000);
+      }
+
+      updateLoadingStatus(status) {
+        const element = document.getElementById('loadingStatus');
+        if (element) {
+          element.textContent = status;
+        }
+      }
+
+      async setupCamera() {
+        try {
+          // Stop existing stream
+          if (this.video.srcObject) {
+            this.video.srcObject.getTracks().forEach(track => track.stop());
+          }
+          
+          // Camera constraints optimized for mobile
+          const constraints = {
+            video: {
+              facingMode: this.facingMode,
+              width: { ideal: 1280, max: 1920 },
+              height: { ideal: 720, max: 1080 },
+              frameRate: { ideal: 30, max: 60 }
+            },
+            audio: false
+          };
+          
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          this.video.srcObject = stream;
+          
+          return new Promise((resolve, reject) => {
+            this.video.onloadedmetadata = () => resolve(this.video);
+            this.video.onerror = () => reject(new Error('Video failed to load'));
+            
+            // Timeout after 5 seconds
+            setTimeout(() => reject(new Error('Video load timeout')), 5000);
+          });
+        } catch (error) {
+          console.error('Camera error:', error);
+          throw new Error('Camera access denied. Please allow camera permissions.');
+        }
+      }
+
+      async loadModels() {
+        try {
+          this.updateLoadingStatus('Loading pose AI...');
+          
+          // Load pose model with fallback to tfjs
+          try {
+            this.models.pose.detector = await poseDetection.createDetector(
+              poseDetection.SupportedModels.MoveNet,
+              {
+                modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+                enableSmoothing: true,
+                minPoseScore: 0.25
+              }
+            );
+          } catch (e) {
+            console.warn('Pose model load failed:', e);
+          }
+          
+          this.updateLoadingStatus('Loading face detection...');
+          
+          // Load face model with tfjs fallback
+          try {
+            this.models.face.detector = await faceDetection.createDetector(
+              faceDetection.SupportedModels.MediaPipeFaceDetector,
+              {
+                runtime: 'tfjs',
+                maxFaces: 3,
+                minDetectionConfidence: 0.5
+              }
+            );
+          } catch (e) {
+            console.warn('Face model load failed:', e);
+          }
+          
+          this.updateLoadingStatus('Loading hand tracking...');
+          
+          // Load hand model with tfjs fallback
+          try {
+            this.models.hand.detector = await handPoseDetection.createDetector(
+              handPoseDetection.SupportedModels.MediaPipeHands,
+              {
+                runtime: 'tfjs',
+                maxHands: 2,
+                minDetectionConfidence: 0.5
+              }
+            );
+          } catch (e) {
+            console.warn('Hand model load failed:', e);
+          }
+          
+          this.updateLoadingStatus('Loading object detection...');
+          
+          // Load COCO-SSD for object detection
+          try {
+            this.models.object.detector = await cocoSsd.load({
+              base: 'lite_mobilenet_v2'
+            });
+          } catch (e) {
+            console.warn('Object model load failed:', e);
+          }
+          
+          this.updateLoadingStatus('Optimizing for your device...');
+          
+          // Warm up models
+          await this.warmUpModels();
+          
+        } catch (error) {
+          console.error('Model loading error:', error);
+          throw new Error('Failed to load AI models. Please refresh.');
+        }
+      }
+
+      async warmUpModels() {
+        // Run each model once with small image to optimize
+        const canvas = document.createElement('canvas');
+        canvas.width = 320;
+        canvas.height = 240;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, 320, 240);
+        
+        const promises = [];
+        
+        if (this.models.pose.detector) {
+          promises.push(
+            this.models.pose.detector.estimatePoses(canvas)
+              .catch(e => console.warn('Pose warmup failed:', e))
+          );
+        }
+        
+        if (this.models.face.detector) {
+          promises.push(
+            this.models.face.detector.estimateFaces(canvas)
+              .catch(e => console.warn('Face warmup failed:', e))
+          );
+        }
+        
+        if (this.models.hand.detector) {
+          promises.push(
+            this.models.hand.detector.estimateHands(canvas)
+              .catch(e => console.warn('Hand warmup failed:', e))
+          );
+        }
+        
+        if (this.models.object.detector) {
+          promises.push(
+            this.models.object.detector.detect(canvas)
+              .catch(e => console.warn('Object warmup failed:', e))
+          );
+        }
+        
+        await Promise.allSettled(promises);
+      }
+
+      resizeCanvases() {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        
+        this.effectCanvas.width = width;
+        this.effectCanvas.height = height;
+        this.overlayCanvas.width = width;
+        this.overlayCanvas.height = height;
+      }
+
+      smoothDetection(current, previous, factor = 0.7) {
+        if (!previous || previous.length === 0 || !current) return current;
+        
+        return current.map((curr, i) => {
+          if (!previous[i]) return curr;
+          
+          // Smooth keypoints
+          if (curr.keypoints && previous[i].keypoints) {
+            curr.keypoints = curr.keypoints.map((kp, j) => {
+              const prevKp = previous[i].keypoints[j];
+              if (!prevKp) return kp;
+              
+              return {
+                ...kp,
+                x: kp.x * factor + prevKp.x * (1 - factor),
+                y: kp.y * factor + prevKp.y * (1 - factor)
+              };
+            });
+          }
+          
+          // Smooth bounding boxes
+          if (curr.box && previous[i].box) {
+            curr.box = {
+              xMin: curr.box.xMin * factor + previous[i].box.xMin * (1 - factor),
+              yMin: curr.box.yMin * factor + previous[i].box.yMin * (1 - factor),
+              width: curr.box.width * factor + previous[i].box.width * (1 - factor),
+              height: curr.box.height * factor + previous[i].box.height * (1 - factor)
+            };
+          }
+          
+          // Smooth COCO bbox
+          if (curr.bbox && previous[i].bbox) {
+            curr.bbox = curr.bbox.map((val, idx) => 
+              val * factor + previous[i].bbox[idx] * (1 - factor)
+            );
+          }
+          
+          return curr;
+        });
+      }
+
+      drawPose(pose) {
+        if (!pose || !pose.keypoints) return;
+        
+        const keypoints = pose.keypoints.filter(kp => kp.score > this.confidenceThreshold);
+        if (keypoints.length === 0) return;
+        
+        const style = this.effectStyles[this.currentEffect].pose;
+        const scaleX = this.effectCanvas.width / this.video.videoWidth;
+        const scaleY = this.effectCanvas.height / this.video.videoHeight;
+        
+        // Set style
+        this.overlayCtx.save();
+        this.overlayCtx.strokeStyle = style.color;
+        this.overlayCtx.fillStyle = style.color;
+        this.overlayCtx.lineWidth = style.width;
+        
+        if (this.currentEffect !== 'minimal') {
+          this.overlayCtx.shadowColor = style.shadow;
+          this.overlayCtx.shadowBlur = 15;
+        }
+        
+        // Draw skeleton
+        const connections = poseDetection.util.getAdjacentPairs(poseDetection.SupportedModels.MoveNet);
+        
+        connections.forEach(([i, j]) => {
+          const kp1 = pose.keypoints[i];
+          const kp2 = pose.keypoints[j];
+          
+          if (kp1 && kp2 && kp1.score > this.confidenceThreshold && kp2.score > this.confidenceThreshold) {
+            this.overlayCtx.beginPath();
+            this.overlayCtx.moveTo(kp1.x * scaleX, kp1.y * scaleY);
+            this.overlayCtx.lineTo(kp2.x * scaleX, kp2.y * scaleY);
+            this.overlayCtx.stroke();
+          }
+        });
+        
+        // Draw keypoints
+        keypoints.forEach(kp => {
+          this.overlayCtx.beginPath();
+          this.overlayCtx.arc(kp.x * scaleX, kp.y * scaleY, 5, 0, Math.PI * 2);
+          this.overlayCtx.fill();
+        });
+        
+        this.overlayCtx.restore();
+      }
+
+      drawFace(face) {
+        if (!face || !face.box) return;
+        
+        const box = face.box;
+        const style = this.effectStyles[this.currentEffect].face;
+        const scaleX = this.effectCanvas.width / this.video.videoWidth;
+        const scaleY = this.effectCanvas.height / this.video.videoHeight;
+        
+        const x = box.xMin * scaleX;
+        const y = box.yMin * scaleY;
+        const w = box.width * scaleX;
+        const h = box.height * scaleY;
+        
+        this.overlayCtx.save();
+        this.overlayCtx.strokeStyle = style.color;
+        this.overlayCtx.lineWidth = style.width;
+        
+        if (this.currentEffect !== 'minimal') {
+          this.overlayCtx.shadowColor = style.shadow;
+          this.overlayCtx.shadowBlur = 20;
+        }
+        
+        if (this.currentEffect === 'thermal') {
+          // Thermal effect - gradient fill
+          const gradient = this.overlayCtx.createRadialGradient(
+            x + w/2, y + h/2, 0,
+            x + w/2, y + h/2, Math.max(w, h)/2
+          );
+          gradient.addColorStop(0, 'rgba(255, 255, 0, 0.3)');
+          gradient.addColorStop(0.5, 'rgba(255, 100, 0, 0.2)');
+          gradient.addColorStop(1, 'rgba(255, 0, 0, 0.1)');
+          
+          this.overlayCtx.fillStyle = gradient;
+          this.overlayCtx.fillRect(x, y, w, h);
+        }
+        
+        // Draw corner brackets
+        const cornerSize = Math.min(w, h) * 0.2;
+        
+        this.overlayCtx.beginPath();
+        // Top-left
+        this.overlayCtx.moveTo(x + cornerSize, y);
+        this.overlayCtx.lineTo(x, y);
+        this.overlayCtx.lineTo(x, y + cornerSize);
+        
+        // Top-right
+        this.overlayCtx.moveTo(x + w - cornerSize, y);
+        this.overlayCtx.lineTo(x + w, y);
+        this.overlayCtx.lineTo(x + w, y + cornerSize);
+        
+        // Bottom-left
+        this.overlayCtx.moveTo(x, y + h - cornerSize);
+        this.overlayCtx.lineTo(x, y + h);
+        this.overlayCtx.lineTo(x + cornerSize, y + h);
+        
+        // Bottom-right
+        this.overlayCtx.moveTo(x + w - cornerSize, y + h);
+        this.overlayCtx.lineTo(x + w, y + h);
+        this.overlayCtx.lineTo(x + w, y + h - cornerSize);
+        
+        this.overlayCtx.stroke();
+        
+        // Add label
+        if (this.currentEffect !== 'minimal') {
+          const confidence = Math.round((face.score || 0.8) * 100);
+          this.overlayCtx.font = '12px -apple-system, system-ui, sans-serif';
+          this.overlayCtx.fillStyle = style.color;
+          this.overlayCtx.fillText(`Face ${confidence}%`, x, y - 5);
+        }
+        
+        this.overlayCtx.restore();
+      }
+
+      drawHand(hand) {
+        if (!hand || !hand.keypoints) return;
+        
+        const keypoints = hand.keypoints;
+        const style = this.effectStyles[this.currentEffect].hand;
+        const scaleX = this.effectCanvas.width / this.video.videoWidth;
+        const scaleY = this.effectCanvas.height / this.video.videoHeight;
+        
+        this.overlayCtx.save();
+        this.overlayCtx.strokeStyle = style.color;
+        this.overlayCtx.fillStyle = style.color;
+        this.overlayCtx.lineWidth = style.width;
+        
+        if (this.currentEffect !== 'minimal') {
+          this.overlayCtx.shadowColor = style.shadow;
+          this.overlayCtx.shadowBlur = 10;
+        }
+        
+        // Hand connections
+        const connections = [
+          [0, 1], [1, 2], [2, 3], [3, 4],     // Thumb
+          [0, 5], [5, 6], [6, 7], [7, 8],     // Index
+          [0, 9], [9, 10], [10, 11], [11, 12], // Middle
+          [0, 13], [13, 14], [14, 15], [15, 16], // Ring
+          [0, 17], [17, 18], [18, 19], [19, 20], // Pinky
+          [5, 9], [9, 13], [13, 17]           // Palm
+        ];
+        
+        // Draw connections
+        connections.forEach(([i, j]) => {
+          if (keypoints[i] && keypoints[j]) {
+            const kp1 = keypoints[i];
+            const kp2 = keypoints[j];
+            
+            this.overlayCtx.beginPath();
+            this.overlayCtx.moveTo(kp1.x * scaleX, kp1.y * scaleY);
+            this.overlayCtx.lineTo(kp2.x * scaleX, kp2.y * scaleY);
+            this.overlayCtx.stroke();
+          }
+        });
+        
+        // Draw keypoints
+        keypoints.forEach((kp, i) => {
+          if (!kp) return;
+          
+          const radius = [0, 4, 8, 12, 16, 20].includes(i) ? 6 : 4;
+          
+          this.overlayCtx.beginPath();
+          this.overlayCtx.arc(kp.x * scaleX, kp.y * scaleY, radius, 0, Math.PI * 2);
+          this.overlayCtx.fill();
+        });
+        
+        // Add label
+        if (this.currentEffect !== 'minimal' && hand.handedness && keypoints[0]) {
+          const palmX = keypoints[0].x * scaleX;
+          const palmY = keypoints[0].y * scaleY;
+          
+          this.overlayCtx.font = '12px -apple-system, system-ui, sans-serif';
+          this.overlayCtx.fillText(hand.handedness, palmX - 20, palmY - 20);
+        }
+        
+        this.overlayCtx.restore();
+      }
+
+      drawObject(prediction) {
+        if (!prediction || !prediction.bbox) return;
+        
+        const style = this.effectStyles[this.currentEffect].object;
+        const scaleX = this.effectCanvas.width / this.video.videoWidth;
+        const scaleY = this.effectCanvas.height / this.video.videoHeight;
+        
+        const [x, y, width, height] = prediction.bbox;
+        const scaledX = x * scaleX;
+        const scaledY = y * scaleY;
+        const scaledWidth = width * scaleX;
+        const scaledHeight = height * scaleY;
+        
+        this.overlayCtx.save();
+        this.overlayCtx.strokeStyle = style.color;
+        this.overlayCtx.lineWidth = style.width;
+        
+        if (this.currentEffect !== 'minimal') {
+          this.overlayCtx.shadowColor = style.shadow;
+          this.overlayCtx.shadowBlur = 15;
+        }
+        
+        // Draw bounding box
+        this.overlayCtx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
+        
+        // Draw label with confidence
+        const label = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
+        
+        this.overlayCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        this.overlayCtx.fillRect(scaledX, scaledY - 25, label.length * 8 + 10, 25);
+        
+        this.overlayCtx.fillStyle = style.color;
+        this.overlayCtx.font = '14px -apple-system, system-ui, sans-serif';
+        this.overlayCtx.fillText(label, scaledX + 5, scaledY - 7);
+        
+        // Add icon for certain objects
+        const objectIcons = {
+          'person': '👤',
+          'cell phone': '📱',
+          'laptop': '💻',
+          'cup': '☕',
+          'book': '📚',
+          'car': '🚗',
+          'dog': '🐕',
+          'cat': '🐈'
+        };
+        
+        if (objectIcons[prediction.class] && this.currentEffect !== 'minimal') {
+          this.overlayCtx.font = '20px -apple-system, system-ui, sans-serif';
+          this.overlayCtx.fillText(objectIcons[prediction.class], scaledX + scaledWidth - 25, scaledY + 25);
+        }
+        
+        this.overlayCtx.restore();
+      }
+
+      applyVisualEffects() {
+        if (this.currentEffect === 'minimal') return;
+        
+        const now = Date.now();
+        
+        switch(this.currentEffect) {
+          case 'matrix':
+            // Matrix rain effect
+            this.overlayCtx.fillStyle = 'rgba(0, 255, 0, 0.05)';
+            this.overlayCtx.fillRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+            
+            // Random green characters
+            if (Math.random() < 0.1) {
+              const chars = '01';
+              const char = chars[Math.floor(Math.random() * chars.length)];
+              const x = Math.random() * this.overlayCanvas.width;
+              const y = Math.random() * this.overlayCanvas.height;
+              
+              this.overlayCtx.fillStyle = '#00ff00';
+              this.overlayCtx.font = '10px monospace';
+              this.overlayCtx.fillText(char, x, y);
+            }
+            break;
+            
+          case 'hologram':
+            // Scan lines
+            this.overlayCtx.strokeStyle = 'rgba(0, 212, 255, 0.1)';
+            this.overlayCtx.lineWidth = 1;
+            
+            const scanY = (now / 10) % this.overlayCanvas.height;
+            this.overlayCtx.beginPath();
+            this.overlayCtx.moveTo(0, scanY);
+            this.overlayCtx.lineTo(this.overlayCanvas.width, scanY);
+            this.overlayCtx.stroke();
+            
+            // Glitch effect
+            if (Math.random() < 0.02) {
+              const glitchHeight = 2 + Math.random() * 10;
+              const glitchY = Math.random() * this.overlayCanvas.height;
+              
+              this.overlayCtx.drawImage(
+                this.overlayCanvas,
+                0, glitchY, this.overlayCanvas.width, glitchHeight,
+                Math.random() * 10 - 5, glitchY, this.overlayCanvas.width, glitchHeight
+              );
+            }
+            break;
+            
+          case 'thermal':
+            // Heat distortion
+            this.overlayCtx.globalCompositeOperation = 'multiply';
+            const gradient = this.overlayCtx.createLinearGradient(0, 0, 0, this.overlayCanvas.height);
+            gradient.addColorStop(0, 'rgba(255, 200, 0, 0.1)');
+            gradient.addColorStop(0.5, 'rgba(255, 100, 0, 0.05)');
+            gradient.addColorStop(1, 'rgba(255, 0, 0, 0.1)');
+            this.overlayCtx.fillStyle = gradient;
+            this.overlayCtx.fillRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+            this.overlayCtx.globalCompositeOperation = 'source-over';
+            break;
+        }
+      }
+
+      async detect() {
+        if (!this.isRunning) return;
+        
+        // Frame skipping for performance
+        this.frameCounter++;
+        if (this.frameCounter % (this.frameSkip + 1) !== 0) {
+          requestAnimationFrame(() => this.detect());
+          return;
+        }
+        
+        try {
+          // Clear canvases
+          this.effectCtx.clearRect(0, 0, this.effectCanvas.width, this.effectCanvas.height);
+          this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+          
+          // Draw video
+          this.effectCtx.drawImage(this.video, 0, 0, this.effectCanvas.width, this.effectCanvas.height);
+          
+          // Check if it's time to run detection
+          const currentTime = performance.now();
+          if (currentTime - this.lastDetectionTime >= this.detectionInterval) {
+            const detections = await this.runDetections();
+            
+            // Draw results with error handling
+            if (detections.poses && detections.poses.length > 0) {
+              detections.poses.forEach(pose => {
+                try {
+                  this.drawPose(pose);
+                } catch (e) {
+                  console.warn('Pose draw error:', e);
+                }
+              });
+            }
+            
+            if (detections.faces && detections.faces.length > 0) {
+              detections.faces.forEach(face => {
+                try {
+                  this.drawFace(face);
+                } catch (e) {
+                  console.warn('Face draw error:', e);
+                }
+              });
+            }
+            
+            if (detections.hands && detections.hands.length > 0) {
+              detections.hands.forEach(hand => {
+                try {
+                  this.drawHand(hand);
+                } catch (e) {
+                  console.warn('Hand draw error:', e);
+                }
+              });
+            }
+            
+            if (detections.objects && detections.objects.length > 0) {
+              detections.objects.forEach(obj => {
+                try {
+                  this.drawObject(obj);
+                } catch (e) {
+                  console.warn('Object draw error:', e);
+                }
+              });
+            }
+            
+            this.lastDetectionTime = currentTime;
+            this.errorCount = 0; // Reset error count on success
+          }
+          
+          // Apply visual effects
+          this.applyVisualEffects();
+          
+          // Update FPS
+          this.updateFPS();
+          
+        } catch (error) {
+          console.error('Detection error:', error);
+          this.errorCount++;
+          
+          if (this.errorCount > this.maxErrors) {
+            this.isRunning = false;
+            this.showNotification('Detection paused due to errors');
+          }
+        }
+        
+        if (this.isRunning) {
+          requestAnimationFrame(() => this.detect());
+        }
+      }
+
+      async runDetections() {
+        const promises = [];
+        const results = {};
+        
+        // Run enabled detectors with error handling
+        if (this.models.pose.enabled && this.models.pose.detector) {
+          promises.push(
+            this.models.pose.detector.estimatePoses(this.video)
+              .then(poses => {
+                results.poses = this.smoothDetection(poses, this.previousDetections.poses);
+                return results.poses;
+              })
+              .catch(e => {
+                console.warn('Pose detection error:', e);
+                results.poses = [];
+              })
+          );
+        }
+        
+        if (this.models.face.enabled && this.models.face.detector) {
+          promises.push(
+            this.models.face.detector.estimateFaces(this.video)
+              .then(faces => {
+                results.faces = this.smoothDetection(faces, this.previousDetections.faces);
+                return results.faces;
+              })
+              .catch(e => {
+                console.warn('Face detection error:', e);
+                results.faces = [];
+              })
+          );
+        }
+        
+        if (this.models.hand.enabled && this.models.hand.detector) {
+          promises.push(
+            this.models.hand.detector.estimateHands(this.video)
+              .then(hands => {
+                results.hands = this.smoothDetection(hands, this.previousDetections.hands);
+                return results.hands;
+              })
+              .catch(e => {
+                console.warn('Hand detection error:', e);
+                results.hands = [];
+              })
+          );
+        }
+        
+        if (this.models.object.enabled && this.models.object.detector) {
+          promises.push(
+            this.models.object.detector.detect(this.video)
+              .then(objects => {
+                const filtered = objects.filter(obj => obj.score > this.confidenceThreshold);
+                results.objects = this.smoothDetection(filtered, this.previousDetections.objects);
+                return results.objects;
+              })
+              .catch(e => {
+                console.warn('Object detection error:', e);
+                results.objects = [];
+              })
+          );
+        }
+        
+        await Promise.allSettled(promises);
+        
+        // Update previous detections for smoothing
+        this.previousDetections = { ...results };
+        
+        return results;
+      }
+
+      updateFPS() {
+        this.frameCount++;
+        const currentTime = performance.now();
+        
+        if (currentTime - this.lastTime >= 1000) {
+          this.fps = Math.round(this.frameCount * 1000 / (currentTime - this.lastTime));
+          const fpsElement = document.getElementById('fpsValue');
+          if (fpsElement) {
+            fpsElement.textContent = this.fps;
+          }
+          
+          // Update status dot color based on FPS
+          const statusDot = document.querySelector('.status-dot');
+          if (statusDot) {
+            if (this.fps >= 50) {
+              statusDot.style.background = '#00ff00';
+            } else if (this.fps >= 30) {
+              statusDot.style.background = '#ffff00';
+            } else {
+              statusDot.style.background = '#ff0000';
+            }
+          }
+          
+          this.frameCount = 0;
+          this.lastTime = currentTime;
+        }
+      }
+
+      showError(title, message) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error-overlay';
+        errorDiv.innerHTML = `
+          <div class="error-icon">⚠️</div>
+          <h2 class="error-title">${title}</h2>
+          <p class="error-message">${message}</p>
+          <button class="error-button" onclick="location.reload()">Refresh Page</button>
+        `;
+        document.body.appendChild(errorDiv);
+      }
+
+      hideLoadingScreen() {
+        const loadingScreen = document.getElementById('loadingScreen');
+        if (loadingScreen) {
+          loadingScreen.classList.add('hidden');
+          setTimeout(() => {
+            loadingScreen.style.display = 'none';
+          }, 800);
+        }
+      }
+
+      async start() {
+        try {
+          this.updateLoadingStatus('Accessing camera...');
+          await this.setupCamera();
+          await this.video.play();
+          
+          this.resizeCanvases();
+          
+          await this.loadModels();
+          
+          this.updateLoadingStatus('Ready!');
+          
+          // Show UI elements
+          setTimeout(() => {
+            this.hideLoadingScreen();
+            
+            const topBar = document.getElementById('topBar');
+            const bottomControls = document.getElementById('bottomControls');
+            const captureButton = document.getElementById('captureButton');
+            
+            if (topBar) topBar.style.display = 'flex';
+            if (bottomControls) bottomControls.style.display = 'block';
+            if (captureButton) captureButton.style.display = 'flex';
+            
+            this.isRunning = true;
+            this.detect();
+            
+            // Show welcome notification
+            this.showNotification('Swipe up for controls • Double tap to change effects');
+          }, 500);
+          
+        } catch (error) {
+          console.error('Startup error:', error);
+          this.showError('Startup Error', error.message || 'Failed to initialize');
+        }
+      }
+    }
+
+    // Initialize app when DOM is ready
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        window.app = new NeuralVisionApp();
+      });
+    } else {
+      window.app = new NeuralVisionApp();
+    }
+
+    // Show start button after a brief delay
+    setTimeout(() => {
+      const startBtn = document.getElementById('startButton');
+      const status = document.getElementById('loadingStatus');
+      
+      if (startBtn) startBtn.style.display = 'block';
+      if (status) status.textContent = 'Tap to begin';
+    }, 1000);
+
+    // Prevent iOS bounce
+    document.addEventListener('touchmove', (e) => {
+      if (!e.target.closest('#bottomControls')) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    // Handle page visibility
+    document.addEventListener('visibilitychange', () => {
+      if (window.app && document.hidden && window.app.isRunning) {
+        window.app.isRunning = false;
+      }
+    });
+    
+    // Error boundary for uncaught errors
+    window.addEventListener('error', (e) => {
+      console.error('Global error:', e.error);
+    });
+    
+    window.addEventListener('unhandledrejection', (e) => {
+      console.error('Unhandled promise rejection:', e.reason);
+    });
+  </script>
+</body>
+</html>
