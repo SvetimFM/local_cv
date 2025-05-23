@@ -905,20 +905,37 @@
         this.cvCanvas = document.getElementById('cvCanvas');
         this.cvCtx = this.cvCanvas.getContext('2d', { 
           alpha: false, 
-          willReadFrequently: true 
+          willReadFrequently: false,
+          desynchronized: true 
         });
         this.segmentationCanvas = document.getElementById('segmentationCanvas');
         this.segmentationCtx = this.segmentationCanvas.getContext('2d', { 
-          alpha: true 
+          alpha: true,
+          desynchronized: true 
         });
         this.effectCanvas = document.getElementById('effectCanvas');
         this.effectCtx = this.effectCanvas.getContext('2d', { 
           alpha: false,
-          willReadFrequently: true
+          willReadFrequently: false,
+          desynchronized: true
         });
         this.overlayCanvas = document.getElementById('overlayCanvas');
         this.overlayCtx = this.overlayCanvas.getContext('2d', { 
-          alpha: true 
+          alpha: true,
+          desynchronized: true 
+        });
+        
+        // Create offscreen canvases for double buffering
+        this.offscreenCanvas = document.createElement('canvas');
+        this.offscreenCtx = this.offscreenCanvas.getContext('2d', {
+          alpha: false,
+          desynchronized: true
+        });
+        
+        this.overlayOffscreen = document.createElement('canvas');
+        this.overlayOffscreenCtx = this.overlayOffscreen.getContext('2d', {
+          alpha: true,
+          desynchronized: true
         });
 
         // Models
@@ -929,6 +946,9 @@
         // Cache for performance
         this.lastColorSettings = null;
         this.frameSkipCounter = 0;
+        this.lastDetections = [];
+        this.lastDetectionTime = 0;
+        this.detectionCacheTimeout = 100; // Cache detections for 100ms
 
         // State
         this.currentMode = 'detection';
@@ -1339,9 +1359,9 @@
           const constraints = {
             video: {
               facingMode: this.facingMode,
-              width: { ideal: 1920, max: 2560 },
-              height: { ideal: 1080, max: 1440 },
-              frameRate: { ideal: 30, max: 60 }
+              width: { ideal: 1280, max: 1920 },
+              height: { ideal: 720, max: 1080 },
+              frameRate: { ideal: 30, max: 30 }
             },
             audio: false
           };
@@ -1364,9 +1384,9 @@
         try {
           this.updateLoadingText('Loading object detection...');
           
-          // Load COCO-SSD for object detection
+          // Load COCO-SSD for object detection with lite model for better performance
           this.objectDetector = await cocoSsd.load({
-            base: 'mobilenet_v2'
+            base: 'lite_mobilenet_v2'
           });
           
           this.updateLoadingText('Optimizing for your device...');
@@ -1414,6 +1434,12 @@
         this.effectCanvas.height = height;
         this.overlayCanvas.width = width;
         this.overlayCanvas.height = height;
+        
+        // Resize offscreen canvases
+        this.offscreenCanvas.width = width;
+        this.offscreenCanvas.height = height;
+        this.overlayOffscreen.width = width;
+        this.overlayOffscreen.height = height;
       }
 
       async processFrame() {
@@ -1422,38 +1448,36 @@
         const startTime = performance.now();
         
         try {
-          // Clear canvases
-          this.cvCtx.clearRect(0, 0, this.cvCanvas.width, this.cvCanvas.height);
-          this.segmentationCtx.clearRect(0, 0, this.segmentationCanvas.width, this.segmentationCanvas.height);
-          this.effectCtx.clearRect(0, 0, this.effectCanvas.width, this.effectCanvas.height);
-          this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+          // Draw video to offscreen canvas first (double buffering)
+          this.offscreenCtx.drawImage(this.video, 0, 0, this.offscreenCanvas.width, this.offscreenCanvas.height);
           
-          // Draw video
-          this.cvCtx.drawImage(this.video, 0, 0, this.cvCanvas.width, this.cvCanvas.height);
+          // Clear overlay offscreen buffer
+          this.overlayOffscreenCtx.clearRect(0, 0, this.overlayOffscreen.width, this.overlayOffscreen.height);
           
           // Skip some frames for heavy processing modes to improve performance
           this.frameSkipCounter++;
-          const shouldProcessHeavy = this.frameSkipCounter % 3 === 0; // Process every third frame for better performance
+          const shouldProcessDetection = this.frameSkipCounter % 2 === 0; // Process every other frame
           
           // Process based on mode
           switch (this.currentMode) {
             case 'detection':
-              if (shouldProcessHeavy) {
-                await this.processDetectionMode();
-              }
+              await this.processDetectionMode(shouldProcessDetection);
               break;
             case 'segmentation':
-              if (shouldProcessHeavy) {
-                await this.processSegmentationMode();
-              }
+              await this.processSegmentationMode(shouldProcessDetection);
               break;
             case 'color':
-              await this.processColorMode(); // Always process color for smooth updates
+              await this.processColorMode();
               break;
             case 'effects':
               await this.processEffectsMode();
               break;
           }
+          
+          // Commit offscreen buffers to visible canvases (double buffering)
+          this.cvCtx.drawImage(this.offscreenCanvas, 0, 0);
+          this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+          this.overlayCtx.drawImage(this.overlayOffscreen, 0, 0);
           
           // Update performance metrics
           this.processingTime = Math.round(performance.now() - startTime);
@@ -1468,7 +1492,21 @@
         }
       }
 
-      async processDetectionMode() {
+      async processDetectionMode(shouldProcess) {
+        // Use cached detections if available and recent
+        const now = performance.now();
+        if (!shouldProcess && this.lastDetections.length > 0 && (now - this.lastDetectionTime) < this.detectionCacheTimeout) {
+          // Redraw cached detections
+          this.lastDetections.forEach(prediction => {
+            if (prediction.score > 0.5) {
+              this.drawBoundingBox(prediction);
+            }
+          });
+          return;
+        }
+        
+        if (!shouldProcess) return;
+        
         // Run object detection and edge detection in parallel for better performance
         const promises = [];
         
@@ -1477,6 +1515,8 @@
           promises.push(
             this.objectDetector.detect(this.video).then(predictions => {
               this.detectedObjects = predictions;
+              this.lastDetections = predictions;
+              this.lastDetectionTime = now;
               
               // Draw bounding boxes
               predictions.forEach(prediction => {
@@ -1492,66 +1532,77 @@
         }
         
         // Edge detection with OpenCV
-        if (this.isOpenCVReady && this.frameSkipCounter % 6 === 0) { // Run edge detection less frequently
+        if (this.isOpenCVReady && this.frameSkipCounter % 4 === 0) { // Run edge detection less frequently
           promises.push(Promise.resolve(this.detectEdges()));
         }
         
         await Promise.all(promises);
       }
 
-      async processSegmentationMode() {
-        // Use object detection for better segmentation
-        if (this.objectDetector) {
-          const predictions = await this.objectDetector.detect(this.video);
+      async processSegmentationMode(shouldProcess) {
+        // Clear segmentation canvas
+        this.segmentationCtx.clearRect(0, 0, this.segmentationCanvas.width, this.segmentationCanvas.height);
+        
+        // Use cached detections if available
+        const predictions = shouldProcess && this.objectDetector ? 
+          await this.objectDetector.detect(this.video) : 
+          this.lastDetections;
           
-          // Draw original video with reduced opacity for background
-          this.segmentationCtx.globalAlpha = 0.3;
-          this.segmentationCtx.filter = `blur(${this.settings.segmentation.backgroundBlur}px)`;
-          this.segmentationCtx.drawImage(this.video, 0, 0, this.segmentationCanvas.width, this.segmentationCanvas.height);
-          this.segmentationCtx.filter = 'none';
-          this.segmentationCtx.globalAlpha = 1;
-          
-          // Highlight detected objects
-          predictions.forEach(prediction => {
-            if (prediction.score > this.settings.segmentation.precision) {
-              const [x, y, width, height] = prediction.bbox;
-              const scaleX = this.segmentationCanvas.width / this.video.videoWidth;
-              const scaleY = this.segmentationCanvas.height / this.video.videoHeight;
-              
-              const scaledX = Math.floor(x * scaleX);
-              const scaledY = Math.floor(y * scaleY);
-              const scaledWidth = Math.floor(width * scaleX);
-              const scaledHeight = Math.floor(height * scaleY);
-              
-              // Draw the object clearly
-              this.segmentationCtx.save();
-              this.segmentationCtx.globalAlpha = 1;
-              
-              // Create clipping path for rounded corners
-              this.segmentationCtx.beginPath();
-              this.segmentationCtx.roundRect(scaledX - 5, scaledY - 5, scaledWidth + 10, scaledHeight + 10, 10);
-              this.segmentationCtx.clip();
-              
-              // Draw the object from original video
-              this.segmentationCtx.drawImage(this.video, 
-                x, y, width, height, 
-                scaledX, scaledY, scaledWidth, scaledHeight
-              );
-              
-              // Add glow effect
-              this.segmentationCtx.shadowColor = '#00ffcc';
-              this.segmentationCtx.shadowBlur = 20;
-              this.segmentationCtx.strokeStyle = '#00ffcc';
-              this.segmentationCtx.lineWidth = 2;
-              this.segmentationCtx.stroke();
-              
-              this.segmentationCtx.restore();
-            }
-          });
+        if (shouldProcess && predictions.length > 0) {
+          this.lastDetections = predictions;
+          this.lastDetectionTime = performance.now();
         }
+        
+        // Draw original video with reduced opacity for background
+        this.segmentationCtx.globalAlpha = 0.3;
+        this.segmentationCtx.filter = `blur(${this.settings.segmentation.backgroundBlur}px)`;
+        this.segmentationCtx.drawImage(this.offscreenCanvas, 0, 0);
+        this.segmentationCtx.filter = 'none';
+        this.segmentationCtx.globalAlpha = 1;
+        
+        // Highlight detected objects
+        predictions.forEach(prediction => {
+          if (prediction.score > this.settings.segmentation.precision) {
+            const [x, y, width, height] = prediction.bbox;
+            const scaleX = this.segmentationCanvas.width / this.video.videoWidth;
+            const scaleY = this.segmentationCanvas.height / this.video.videoHeight;
+            
+            const scaledX = Math.floor(x * scaleX);
+            const scaledY = Math.floor(y * scaleY);
+            const scaledWidth = Math.floor(width * scaleX);
+            const scaledHeight = Math.floor(height * scaleY);
+            
+            // Draw the object clearly
+            this.segmentationCtx.save();
+            this.segmentationCtx.globalAlpha = 1;
+            
+            // Create clipping path for rounded corners
+            this.segmentationCtx.beginPath();
+            this.segmentationCtx.roundRect(scaledX - 5, scaledY - 5, scaledWidth + 10, scaledHeight + 10, 10);
+            this.segmentationCtx.clip();
+            
+            // Draw the object from original video
+            this.segmentationCtx.drawImage(this.video, 
+              x, y, width, height, 
+              scaledX, scaledY, scaledWidth, scaledHeight
+            );
+            
+            // Add glow effect
+            this.segmentationCtx.shadowColor = '#00ffcc';
+            this.segmentationCtx.shadowBlur = 20;
+            this.segmentationCtx.strokeStyle = '#00ffcc';
+            this.segmentationCtx.lineWidth = 2;
+            this.segmentationCtx.stroke();
+            
+            this.segmentationCtx.restore();
+          }
+        });
       }
 
       async processColorMode() {
+        // Clear effect canvas
+        this.effectCtx.clearRect(0, 0, this.effectCanvas.width, this.effectCanvas.height);
+        
         // Only process if color settings have changed
         const colorChanged = this.settings.color.hue !== 0 || 
                            this.settings.color.saturation !== 100 || 
@@ -1559,40 +1610,56 @@
                            
         if (!colorChanged) {
           // Just draw the original video
-          this.effectCtx.drawImage(this.video, 0, 0, this.effectCanvas.width, this.effectCanvas.height);
+          this.effectCtx.drawImage(this.offscreenCanvas, 0, 0);
           return;
         }
         
-        // Detect objects first
-        if (this.objectDetector) {
-          const predictions = await this.objectDetector.detect(this.video);
+        // Use cached detections or get new ones
+        const predictions = this.frameSkipCounter % 2 === 0 && this.objectDetector ? 
+          await this.objectDetector.detect(this.video) : 
+          this.lastDetections;
           
-          // Draw original video first
-          this.effectCtx.drawImage(this.video, 0, 0, this.effectCanvas.width, this.effectCanvas.height);
-          
-          // Apply color manipulation to detected objects
-          predictions.forEach(prediction => {
-            if (prediction.score > 0.6) {
-              this.applyOptimizedColorManipulation(prediction);
-            }
-          });
+        if (predictions !== this.lastDetections) {
+          this.lastDetections = predictions;
+          this.lastDetectionTime = performance.now();
         }
+        
+        // Draw original video first
+        this.effectCtx.drawImage(this.offscreenCanvas, 0, 0);
+        
+        // Apply color manipulation to detected objects
+        predictions.forEach(prediction => {
+          if (prediction.score > 0.6) {
+            this.applyOptimizedColorManipulation(prediction);
+          }
+        });
       }
 
       async processEffectsMode() {
+        // Clear effect canvas
+        this.effectCtx.clearRect(0, 0, this.effectCanvas.width, this.effectCanvas.height);
+        
+        // Draw base video
+        this.effectCtx.drawImage(this.offscreenCanvas, 0, 0);
+        
         // Apply visual effects
         this.applyVisualEffects();
         
-        // Object detection for effects
-        if (this.objectDetector) {
-          const predictions = await this.objectDetector.detect(this.video);
+        // Use cached detections for effects
+        const predictions = this.frameSkipCounter % 2 === 0 && this.objectDetector ? 
+          await this.objectDetector.detect(this.video) : 
+          this.lastDetections;
           
-          predictions.forEach(prediction => {
-            if (prediction.score > 0.5) {
-              this.applyObjectEffects(prediction);
-            }
-          });
+        if (predictions !== this.lastDetections) {
+          this.lastDetections = predictions;
+          this.lastDetectionTime = performance.now();
         }
+        
+        predictions.forEach(prediction => {
+          if (prediction.score > 0.5) {
+            this.applyObjectEffects(prediction);
+          }
+        });
       }
 
       detectEdges() {
@@ -1635,12 +1702,13 @@
           const hierarchy = new cv.Mat();
           cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
           
-          // Draw edges
-          this.overlayCtx.save();
-          this.overlayCtx.strokeStyle = '#00ffcc';
-          this.overlayCtx.lineWidth = 2;
-          this.overlayCtx.shadowColor = '#00ffcc';
-          this.overlayCtx.shadowBlur = 10;
+          // Draw edges to offscreen buffer
+          const ctx = this.overlayOffscreenCtx;
+          ctx.save();
+          ctx.strokeStyle = '#00ffcc';
+          ctx.lineWidth = 2;
+          ctx.shadowColor = '#00ffcc';
+          ctx.shadowBlur = 10;
           
           let edgeCount = 0;
           const maxContours = 50; // Limit number of contours for performance
@@ -1648,26 +1716,26 @@
           for (let i = 0; i < Math.min(contours.size(), maxContours); i++) {
             const contour = contours.get(i);
             if (contour.rows > 5) { // Filter small contours
-              this.overlayCtx.beginPath();
+              ctx.beginPath();
               for (let j = 0; j < contour.rows; j++) {
                 const point = contour.intPtr(j);
                 const scaledX = point[0] / scale;
                 const scaledY = point[1] / scale;
                 
                 if (j === 0) {
-                  this.overlayCtx.moveTo(scaledX, scaledY);
+                  ctx.moveTo(scaledX, scaledY);
                 } else {
-                  this.overlayCtx.lineTo(scaledX, scaledY);
+                  ctx.lineTo(scaledX, scaledY);
                 }
               }
-              this.overlayCtx.closePath();
-              this.overlayCtx.stroke();
+              ctx.closePath();
+              ctx.stroke();
               edgeCount++;
             }
             contour.delete();
           }
           
-          this.overlayCtx.restore();
+          ctx.restore();
           this.edgePoints = edgeCount;
           
           // Cleanup
@@ -1684,6 +1752,8 @@
 
       detectShapes() {
         // Simple shape detection based on object detection results
+        const ctx = this.overlayOffscreenCtx;
+        
         this.detectedObjects.forEach(obj => {
           const aspectRatio = obj.bbox[2] / obj.bbox[3];
           let shape = 'Rectangle';
@@ -1694,76 +1764,80 @@
             shape = 'Long Rectangle';
           }
           
-          // Draw shape label
+          // Draw shape label to offscreen buffer
           const [x, y] = obj.bbox;
-          this.overlayCtx.fillStyle = '#ff00ff';
-          this.overlayCtx.font = '12px -apple-system, system-ui, sans-serif';
-          this.overlayCtx.fillText(shape, x, y - 25);
+          const scaleX = this.overlayOffscreen.width / this.video.videoWidth;
+          const scaleY = this.overlayOffscreen.height / this.video.videoHeight;
+          
+          ctx.fillStyle = '#ff00ff';
+          ctx.font = '12px -apple-system, system-ui, sans-serif';
+          ctx.fillText(shape, x * scaleX, y * scaleY - 35);
         });
       }
 
       drawBoundingBox(prediction) {
         const [x, y, width, height] = prediction.bbox;
-        const scaleX = this.overlayCanvas.width / this.video.videoWidth;
-        const scaleY = this.overlayCanvas.height / this.video.videoHeight;
+        const scaleX = this.overlayOffscreen.width / this.video.videoWidth;
+        const scaleY = this.overlayOffscreen.height / this.video.videoHeight;
         
         const scaledX = x * scaleX;
         const scaledY = y * scaleY;
         const scaledWidth = width * scaleX;
         const scaledHeight = height * scaleY;
         
+        // Draw to offscreen buffer
+        const ctx = this.overlayOffscreenCtx;
+        
         // Draw box
-        this.overlayCtx.strokeStyle = '#00ffcc';
-        this.overlayCtx.lineWidth = 3;
-        this.overlayCtx.shadowColor = '#00ffcc';
-        this.overlayCtx.shadowBlur = 15;
+        ctx.strokeStyle = '#00ffcc';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = '#00ffcc';
+        ctx.shadowBlur = 15;
         
-        // Animated corners
+        // Simplified corners without animation for better performance
         const cornerSize = Math.min(scaledWidth, scaledHeight) * 0.2;
-        const time = Date.now() / 1000;
-        const pulse = Math.sin(time * 3) * 0.5 + 0.5;
         
-        this.overlayCtx.globalAlpha = 0.7 + pulse * 0.3;
+        ctx.globalAlpha = 0.9;
         
         // Top-left
-        this.overlayCtx.beginPath();
-        this.overlayCtx.moveTo(scaledX + cornerSize, scaledY);
-        this.overlayCtx.lineTo(scaledX, scaledY);
-        this.overlayCtx.lineTo(scaledX, scaledY + cornerSize);
-        this.overlayCtx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(scaledX + cornerSize, scaledY);
+        ctx.lineTo(scaledX, scaledY);
+        ctx.lineTo(scaledX, scaledY + cornerSize);
+        ctx.stroke();
         
         // Top-right
-        this.overlayCtx.beginPath();
-        this.overlayCtx.moveTo(scaledX + scaledWidth - cornerSize, scaledY);
-        this.overlayCtx.lineTo(scaledX + scaledWidth, scaledY);
-        this.overlayCtx.lineTo(scaledX + scaledWidth, scaledY + cornerSize);
-        this.overlayCtx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(scaledX + scaledWidth - cornerSize, scaledY);
+        ctx.lineTo(scaledX + scaledWidth, scaledY);
+        ctx.lineTo(scaledX + scaledWidth, scaledY + cornerSize);
+        ctx.stroke();
         
         // Bottom-left
-        this.overlayCtx.beginPath();
-        this.overlayCtx.moveTo(scaledX, scaledY + scaledHeight - cornerSize);
-        this.overlayCtx.lineTo(scaledX, scaledY + scaledHeight);
-        this.overlayCtx.lineTo(scaledX + cornerSize, scaledY + scaledHeight);
-        this.overlayCtx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(scaledX, scaledY + scaledHeight - cornerSize);
+        ctx.lineTo(scaledX, scaledY + scaledHeight);
+        ctx.lineTo(scaledX + cornerSize, scaledY + scaledHeight);
+        ctx.stroke();
         
         // Bottom-right
-        this.overlayCtx.beginPath();
-        this.overlayCtx.moveTo(scaledX + scaledWidth - cornerSize, scaledY + scaledHeight);
-        this.overlayCtx.lineTo(scaledX + scaledWidth, scaledY + scaledHeight);
-        this.overlayCtx.lineTo(scaledX + scaledWidth, scaledY + scaledHeight - cornerSize);
-        this.overlayCtx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(scaledX + scaledWidth - cornerSize, scaledY + scaledHeight);
+        ctx.lineTo(scaledX + scaledWidth, scaledY + scaledHeight);
+        ctx.lineTo(scaledX + scaledWidth, scaledY + scaledHeight - cornerSize);
+        ctx.stroke();
         
-        this.overlayCtx.globalAlpha = 1;
+        ctx.globalAlpha = 1;
         
         // Label
         const label = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
         
-        this.overlayCtx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-        this.overlayCtx.fillRect(scaledX, scaledY - 30, label.length * 8 + 10, 25);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.fillRect(scaledX, scaledY - 30, label.length * 8 + 10, 25);
         
-        this.overlayCtx.fillStyle = '#00ffcc';
-        this.overlayCtx.font = '14px -apple-system, system-ui, sans-serif';
-        this.overlayCtx.fillText(label, scaledX + 5, scaledY - 10);
+        ctx.fillStyle = '#00ffcc';
+        ctx.font = '14px -apple-system, system-ui, sans-serif';
+        ctx.fillText(label, scaledX + 5, scaledY - 10);
       }
 
       applyOptimizedColorManipulation(prediction) {
@@ -1919,8 +1993,8 @@
 
       applyObjectEffects(prediction) {
         const [x, y, width, height] = prediction.bbox;
-        const scaleX = this.overlayCanvas.width / this.video.videoWidth;
-        const scaleY = this.overlayCanvas.height / this.video.videoHeight;
+        const scaleX = this.overlayOffscreen.width / this.video.videoWidth;
+        const scaleY = this.overlayOffscreen.height / this.video.videoHeight;
         
         const scaledX = x * scaleX;
         const scaledY = y * scaleY;
@@ -1930,8 +2004,11 @@
         const centerX = scaledX + scaledWidth / 2;
         const centerY = scaledY + scaledHeight / 2;
         
-        // Particle effects
-        const particleCount = Math.floor(this.settings.effects.intensity * 20);
+        // Use offscreen context
+        const ctx = this.overlayOffscreenCtx;
+        
+        // Particle effects - reduce particle count for performance
+        const particleCount = Math.floor(this.settings.effects.intensity * 10);
         const time = Date.now() / 1000;
         
         for (let i = 0; i < particleCount; i++) {
@@ -1941,15 +2018,15 @@
           const px = centerX + Math.cos(angle) * radius;
           const py = centerY + Math.sin(angle) * radius;
           
-          this.overlayCtx.fillStyle = `hsla(${180 + i * 10}, 100%, 50%, ${this.settings.effects.intensity})`;
-          this.overlayCtx.beginPath();
-          this.overlayCtx.arc(px, py, 3, 0, Math.PI * 2);
-          this.overlayCtx.fill();
+          ctx.fillStyle = `hsla(${180 + i * 10}, 100%, 50%, ${this.settings.effects.intensity})`;
+          ctx.beginPath();
+          ctx.arc(px, py, 3, 0, Math.PI * 2);
+          ctx.fill();
         }
         
         // Energy field
         if (this.settings.effects.glow > 0) {
-          const gradient = this.overlayCtx.createRadialGradient(
+          const gradient = ctx.createRadialGradient(
             centerX, centerY, 0,
             centerX, centerY, Math.max(scaledWidth, scaledHeight) / 2
           );
@@ -1958,8 +2035,8 @@
           gradient.addColorStop(0.5, `rgba(255, 0, 255, ${this.settings.effects.glow * 0.2})`);
           gradient.addColorStop(1, 'rgba(0, 204, 255, 0)');
           
-          this.overlayCtx.fillStyle = gradient;
-          this.overlayCtx.fillRect(scaledX, scaledY, scaledWidth, scaledHeight);
+          ctx.fillStyle = gradient;
+          ctx.fillRect(scaledX, scaledY, scaledWidth, scaledHeight);
         }
       }
 
