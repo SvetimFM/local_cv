@@ -1343,6 +1343,12 @@
       switchMode(mode) {
         this.currentMode = mode;
         
+        // Clear cached edge canvas when switching modes
+        if (mode !== 'detection' && this.cachedEdgeCanvas) {
+          const cachedCtx = this.cachedEdgeCanvas.getContext('2d');
+          cachedCtx.clearRect(0, 0, this.cachedEdgeCanvas.width, this.cachedEdgeCanvas.height);
+        }
+        
         // Enable/disable tap handler based on mode
         const tapHandler = document.getElementById('tapHandler');
         if (mode === 'color') {
@@ -1610,8 +1616,8 @@
             this.effectCtx.clearRect(0, 0, this.effectCanvas.width, this.effectCanvas.height);
           }
           
-          // Clear overlay offscreen buffer only if not caching edge results
-          if (this.currentMode !== 'detection' || this.frameSkipCounter % 3 === 0) {
+          // Clear overlay offscreen buffer only when processing new frame
+          if (this.currentMode !== 'detection' || shouldProcessDetection) {
             this.overlayOffscreenCtx.clearRect(0, 0, this.overlayOffscreen.width, this.overlayOffscreen.height);
           }
           
@@ -1638,16 +1644,15 @@
           // Always update base video canvas
           this.cvCtx.drawImage(this.offscreenCanvas, 0, 0);
           
-          // Update overlay with smooth transition
-          if (this.currentMode === 'detection' && this.frameSkipCounter % 3 !== 0) {
-            // Keep previous edge detection visible between updates
-            this.overlayCtx.globalAlpha = 0.9;
+          // Update overlay only when we have new content
+          if (this.currentMode === 'detection' && !shouldProcessDetection && this.cachedEdgeCanvas) {
+            // For edge detection, only update when we process new edges
+            // This prevents flicker between frames
           } else {
-            this.overlayCtx.globalAlpha = 1;
+            // For other modes or when processing new detection data
+            this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+            this.overlayCtx.drawImage(this.overlayOffscreen, 0, 0);
           }
-          this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
-          this.overlayCtx.drawImage(this.overlayOffscreen, 0, 0);
-          this.overlayCtx.globalAlpha = 1;
           
           // Update performance metrics
           this.processingTime = Math.round(performance.now() - startTime);
@@ -1663,20 +1668,25 @@
       }
 
       async processDetectionMode(shouldProcess) {
-        // Always redraw cached edge results if available
-        if (this.cachedEdgeCanvas && !shouldProcess) {
-          this.overlayOffscreenCtx.drawImage(this.cachedEdgeCanvas, 0, 0);
-        }
-        
         // Use cached detections if available and recent
         const now = performance.now();
-        if (!shouldProcess && this.lastDetections.length > 0 && (now - this.lastDetectionTime) < this.detectionCacheTimeout) {
+        const useCache = !shouldProcess && this.lastDetections.length > 0 && (now - this.lastDetectionTime) < this.detectionCacheTimeout;
+        
+        if (useCache) {
           // Redraw cached detections
           this.lastDetections.forEach(prediction => {
             if (prediction.score > 0.5) {
               this.drawBoundingBox(prediction);
             }
           });
+          
+          // Always redraw cached edge results if available
+          if (this.cachedEdgeCanvas) {
+            this.overlayOffscreenCtx.save();
+            this.overlayOffscreenCtx.globalAlpha = 0.95;
+            this.overlayOffscreenCtx.drawImage(this.cachedEdgeCanvas, 0, 0);
+            this.overlayOffscreenCtx.restore();
+          }
           return;
         }
         
@@ -1719,9 +1729,13 @@
           this.cachedEdgeCanvas.width = this.overlayOffscreen.width;
           this.cachedEdgeCanvas.height = this.overlayOffscreen.height;
         }
-        const cachedCtx = this.cachedEdgeCanvas.getContext('2d');
+        const cachedCtx = this.cachedEdgeCanvas.getContext('2d', { alpha: true });
         cachedCtx.clearRect(0, 0, this.cachedEdgeCanvas.width, this.cachedEdgeCanvas.height);
         cachedCtx.drawImage(this.overlayOffscreen, 0, 0);
+        
+        // Update main overlay canvas immediately with the new edges
+        this.overlayCtx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+        this.overlayCtx.drawImage(this.overlayOffscreen, 0, 0);
       }
 
       async processSegmentationMode(shouldProcess) {
@@ -1950,7 +1964,7 @@
           ctx.lineWidth = 2;
           ctx.shadowColor = '#00ffcc';
           ctx.shadowBlur = 10;
-          ctx.globalAlpha = 0.8;
+          ctx.globalAlpha = 0.9;
           
           let edgeCount = 0;
           const maxContours = 30; // Reduced for better performance
